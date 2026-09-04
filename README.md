@@ -45,9 +45,9 @@ When the context approaches its limit (85% by default), the engine does not writ
 
 ## Compatibility 兼容性
 
-- **与 compaction-basic 互斥**：本插件启动时若检测到 compaction-basic 的 `auto=true` 会**拒绝装载**（fail loud）——两个自动压缩引擎不能同时跑。主 profile 中 compaction-basic 默认 disabled，通常无冲突。
+- **单槽优先原则**：`compaction` 服务是单槽——本插件安装后默认**接管**该槽（rollover 换窗语义），要求在 profile bundles 里位于其它压缩引擎（dsh-glm / dsh-kiro / compaction-basic）**之前**。被让位的引擎（如 dsh-glm）凭其内置谦让检查自动跳过挂载，其余功能不受影响。可用状态探针确认当前模式：`cat <dsh home>/dsh-auto-compact/engine-state.json`（`engineMounted: true` = rollover 已接管；`false` = 槽被其它引擎占用，本插件仅提供工具与提醒）。
 - `/compact` 手动命令在本引擎在场时自动获得换窗语义（继承自官方引擎的 `compactNow` 路径）。
-- Peer deps 由 DSH 宿主提供；本插件零运行时 npm 依赖。
+- Peer deps 由 DSH 宿主提供；本插件零运行时 npm 依赖（仅自带 `@deepseek-ai/schemastery`）。
 
 ## Uninstall 卸载
 
