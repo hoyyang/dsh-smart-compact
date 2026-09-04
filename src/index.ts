@@ -208,7 +208,7 @@ export function apply(ctx: Context, config: unknown): void {
   })), `${PLUGIN}: ctx_history`)
 
   // ── Tool: new_context ────────────────────────────────────────────────────
-  if (engineMounted) {
+  if (engineMounted && cfg.auto) {
     ctx.effect(() => ctx.tools.register(defineTool({
       name: 'new_context',
       description: '请求开启全新上下文窗口（本步完成后生效）/ Request a fresh context window; takes effect after this step',
