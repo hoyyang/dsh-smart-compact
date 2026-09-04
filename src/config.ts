@@ -2,7 +2,7 @@
  * dsh-auto-compact configuration: load-time validated, fail-loud.
  * @module dsh-auto-compact/config
  */
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 
 export interface ResolvedConfig {
   /** Master switch: false disables every tool and the engine (pure no-op). */
