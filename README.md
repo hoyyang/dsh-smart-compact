@@ -1,12 +1,69 @@
-# @dsh-external/dsh-auto-compact
+# dsh-auto-compact
 
-Codex-style context window auto-management for DSH: budget visibility, rollover compaction engine, notes handoff, history recall
+[![dsh-plugin](https://img.shields.io/badge/dsh-plugin-blue)](https://github.com/topic/dsh-plugin)
 
-由 dsh-super-injector dev_scaffold_plugin 生成。
+**Codex-style context window auto-management for DeepSeek Harness. / DeepSeek Harness 的 Codex 式上下文窗口自动管理插件。**
 
-## 构建与注入
+给模型装上"自己管理上下文窗口"的五件套：看得见剩余预算、快满时被提醒交接、写跨压缩存活的工作笔记、按需回查被归档的原始内容、以及一个**零模型调用的换窗压缩引擎**（替代传统的"LLM 摘要压缩"）。
 
-```bash
-DSH_CHECKOUT=<checkout> bash scripts/build.sh
-# 注入器环境内：dev_inject_plugin <本目录>
+Give the model Codex CLI's new context strategy: live budget visibility, wrap-up reminders, working notes that survive compaction, on-demand recall of archived original content, and a rollover compaction engine that switches to a fresh window with **zero summarization model calls**.
+
+## Install / Update 安装与更新
+
+```sh
+dsh plugin --profile web add @dsh-external/dsh-auto-compact
+dsh plugin --profile web update @dsh-external/dsh-auto-compact@latest
 ```
+
+Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 即可。
+
+## What the model gets 模型获得的能力
+
+| Tool 工具 | What it does 作用 |
+|---|---|
+| `get_context_remaining` | 当前会话剩余 token 预算（total / window / remaining） |
+| `ctx_notes` | 会话工作笔记（write/append/read/search/list）——跨压缩、跨换窗存活 |
+| `ctx_history` | 回查被 rollover 归档的原始事件（list 窗口 / read 按 seq / search 关键词） |
+| `new_context` | 模型主动请求开新窗口（本步采样完成后、下一步前生效，不打断当前步） |
+
+## How rollover works 换窗原理（说人话）
+
+上下文快满（默认窗口的 85%）时不再"把旧对话压成摘要"，而是：先把旧窗口整体**原封不动存档**（本来就有的会话持久化流，零新存储）→ 留 8192 token 缓冲让模型写交接笔记 → 然后开一张干净的新窗口，窗口里只放一段固定模板（"旧窗口已完整存档，当前状态在 ctx_notes，细节用 ctx_history 查"）。全程**不调用一次摘要模型**；旧内容无损、随时可精确回读。
+
+When the context approaches its limit (85% by default), the engine does not write an LLM summary. Instead it archives the old window intact (the session's existing durable event stream — no new storage), grants a 8192-token grace band for the model to write handoff notes, then opens a fresh window whose anchor is a fixed template pointing at `ctx_notes` and `ctx_history`. Zero summarization calls; nothing is lost.
+
+## Configuration 配置（config.toml → 插件配置）
+
+| Key | Default | Meaning 说明 |
+|---|---|---|
+| `enabled` | `true` | 总开关；false 时插件完全静默 |
+| `auto` | `true` | 自动换窗 + 提醒 + new_context；false 时仅手动 /compact 走换窗 |
+| `thresholdRatio` | `0.85` | 进入缓冲带的窗口占比 |
+| `fallbackBufferTokens` | `8192` | 缓冲带宽度；超过即强制换窗 |
+| `maxToolOutputTokens` | `8192` | 单次工具输出截断上限 |
+| `notesDir` | `<dsh home>/dsh-auto-compact/notes` | 笔记存储目录 |
+
+## Compatibility 兼容性
+
+- **与 compaction-basic 互斥**：本插件启动时若检测到 compaction-basic 的 `auto=true` 会**拒绝装载**（fail loud）——两个自动压缩引擎不能同时跑。主 profile 中 compaction-basic 默认 disabled，通常无冲突。
+- `/compact` 手动命令在本引擎在场时自动获得换窗语义（继承自官方引擎的 `compactNow` 路径）。
+- Peer deps 由 DSH 宿主提供；本插件零运行时 npm 依赖。
+
+## Uninstall 卸载
+
+```sh
+dsh plugin --profile web remove @dsh-external/dsh-auto-compact
+```
+
+卸载即净：工具、监听器、引擎随插件 fiber 一起销毁；笔记文件保留在 `notesDir`（如需彻底清理请手动删除该目录）。压缩行为恢复为 DSH 默认。
+
+Uninstall removes every tool, listener, and engine with the plugin fiber; notes files are kept under `notesDir` (delete manually if unwanted).
+
+## Verification status 验证声明
+
+- Vitest 单元测试覆盖：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费、生命周期幂等。
+- 隔离 staging 环境通过 `dsh --dump-config` 组合预检后才允许转正；本 README 所述行为与源码一致。
+
+## License
+
+BSD-3-Clause

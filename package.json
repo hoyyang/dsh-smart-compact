@@ -11,17 +11,23 @@
   ],
   "license": "BSD-3-Clause",
   "peerDependencies": {
+    "@deepseek-ai/dsh-compaction": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-compaction-basic": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-home-paths": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-token-meter": ">=0.0.1-rc <2",
     "cordis": ">=4.0.0-rc <5",
     "schemastery": "^3.18.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
   },
   "scripts": {
     "build": "bash scripts/build.sh",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
   }
 }
