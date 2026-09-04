@@ -11,6 +11,8 @@
  *    with a zero-model-call handoff template, plus the wrap-up reminder.
  * @module @dsh-external/dsh-auto-compact
  */
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
@@ -93,6 +95,31 @@ export function apply(ctx: Context, config: unknown): void {
   if (!engineMounted) {
     const holderName = probe?.constructor?.name ?? 'another compaction engine'
     ctx.logger.info(`${PLUGIN}: compaction slot occupied by ${holderName} — mounting tools + reminder only; rollover engine skipped (free the slot to enable it, see README)`)
+  }
+
+  // ── Status probe: durable, human-inspectable mount decision ──────────────
+  // Ops surface for "which mode is dsh-auto-compact actually in?" — read
+  // <dsh home>/dsh-auto-compact/engine-state.json after any boot.
+  try {
+    const stateDir = dshHomePath(PLUGIN)
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      join(stateDir, 'engine-state.json'),
+      `${JSON.stringify({
+        plugin: PLUGIN,
+        version: '0.0.7',
+        engineMounted,
+        slotHolder: engineMounted ? null : probe?.constructor?.name ?? 'unknown',
+        auto: cfg.auto,
+        thresholdRatio: cfg.thresholdRatio,
+        fallbackBufferTokens: cfg.fallbackBufferTokens,
+        notesDir: notesRoot,
+        armedAt: new Date().toISOString(),
+      }, null, 2)}\n`,
+      'utf8',
+    )
+  } catch (error) {
+    ctx.logger.warn(`${PLUGIN}: could not write engine-state.json: ${(error as Error).message}`)
   }
 
   const getBudget = (session: object) => {
