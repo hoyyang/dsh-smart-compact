@@ -116,10 +116,15 @@ describe('apply() lifecycle', () => {
     expect(registered).toHaveLength(4)
   })
 
-  it('refuses to load alongside an auto compaction-basic (mutual exclusion, fail loud)', async () => {
-    const { ctx } = makeCtx()
-    ;(ctx as unknown as { get: (key: string) => unknown }).get = vi.fn((key: string) => (key === 'compaction-basic' ? { config: { auto: true } } : undefined))
-    const dir = await notesDir()
-    expect(() => apply(ctx, { notesDir: dir })).toThrow(/compaction-basic has auto=true/)
+  it('yields the compaction slot politely when another engine owns it', async () => {
+    const { ctx, registered, listeners } = makeCtx()
+    ;(ctx as unknown as { get: (key: string) => unknown }).get = vi.fn((key: string) =>
+      key === 'compaction' ? { constructor: { name: 'GlmCompactionEngine' } } : undefined,
+    )
+    apply(ctx, { notesDir: await notesDir() })
+    // tools minus new_context still mount; no engine listeners; loud notice logged
+    expect(registered.map((t) => t.name).sort()).toEqual(['ctx_history', 'ctx_notes', 'get_context_remaining'])
+    expect(listeners.get('agent/pre-step')).toBeUndefined()
+    expect(ctx.logger.info).toHaveBeenCalledWith(expect.stringContaining('compaction slot occupied by GlmCompactionEngine'))
   })
 })

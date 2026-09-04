@@ -50,31 +50,37 @@ export function apply(ctx: Context, config: unknown): void {
   const notes = new NotesStore(notesRoot)
   const pending: PendingRollover = new WeakSet()
 
-  // ── Engine (rollover compaction) ─────────────────────────────────────────
-  // Mutually exclusive with compaction-basic's automatic engine: two auto
-  // engines would double-compact. Fail loud instead of silently racing.
-  const basicEngine = (() => {
+  // ── Engine (rollover compaction) — polite slot acquisition ───────────────
+  // The `compaction` service is a single slot (dsh-glm's GlmCompactionEngine,
+  // kiro, compaction-basic all mount there). Yield when occupied: tools and
+  // the reminder still work against whatever engine owns the slot (they read
+  // the same compaction/summary events), and the rollover engine mounts only
+  // when the slot is free.
+  const slotHolder = (() => {
     try {
-      return ctx.get('compaction-basic') as { config?: { auto?: boolean } } | undefined
+      return ctx.get('compaction') as { constructor?: { name?: string } } | undefined
     } catch {
       return undefined
     }
   })()
-  if (basicEngine?.config?.auto) {
-    throw new Error(`${PLUGIN}: compaction-basic has auto=true; disable one of the two automatic compaction engines before enabling both`)
+  const engineMounted = slotHolder === undefined
+  if (engineMounted) {
+    const engine = new RolloverCompactionEngine(
+      ctx as never,
+      { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto },
+      { thresholdRatio: cfg.thresholdRatio, fallbackBufferTokens: cfg.fallbackBufferTokens, auto: cfg.auto, logger: ctx.logger },
+      pending,
+    )
+    // basic's constructor registers its listeners on the current fiber; expose a
+    // defensive dispose for hosts that require one.
+    ctx.effect(() => () => {
+      ctx.logger.debug(`${PLUGIN}: engine listeners are fiber-managed and dropped with this plugin`)
+    }, `${PLUGIN}: rollover engine`)
+    void engine
+  } else {
+    const holderName = slotHolder?.constructor?.name ?? 'unknown engine'
+    ctx.logger.info(`${PLUGIN}: compaction slot occupied by ${holderName} — mounting tools + reminder only; rollover engine skipped (free the slot to enable it, see README)`)
   }
-
-  const engine = new RolloverCompactionEngine(
-    ctx as never,
-    { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto },
-    { thresholdRatio: cfg.thresholdRatio, fallbackBufferTokens: cfg.fallbackBufferTokens, auto: cfg.auto, logger: ctx.logger },
-    pending,
-  )
-  // basic's constructor registers its listeners on the current fiber; expose a
-  // defensive dispose for hosts that require one.
-  ctx.effect(() => () => {
-    ctx.logger.debug(`${PLUGIN}: engine listeners are fiber-managed and dropped with this plugin`)
-  }, `${PLUGIN}: rollover engine`)
 
   const getBudget = (session: object) => {
     const agent = session as AgentLike
@@ -202,7 +208,7 @@ export function apply(ctx: Context, config: unknown): void {
   })), `${PLUGIN}: ctx_history`)
 
   // ── Tool: new_context ────────────────────────────────────────────────────
-  if (cfg.auto) {
+  if (engineMounted) {
     ctx.effect(() => ctx.tools.register(defineTool({
       name: 'new_context',
       description: '请求开启全新上下文窗口（本步完成后生效）/ Request a fresh context window; takes effect after this step',
