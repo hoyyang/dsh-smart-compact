@@ -97,7 +97,7 @@ export function apply(ctx: Context, config: unknown): void {
     ctx.logger.info(`${PLUGIN}: compaction slot occupied by ${holderName} — mounting tools + reminder only; rollover engine skipped (free the slot to enable it, see README)`)
   }
 
-  const pkgVersion = (() => { try { return (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown' } catch { return 'unknown' } })()
+  const pkgVersion = (() => { try { return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown' } catch { return 'unknown' } })()
 
   // ── Status probe: durable, human-inspectable mount decision ──────────────
   // Ops surface for "which mode is dsh-auto-compact actually in?" — read
