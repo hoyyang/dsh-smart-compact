@@ -11,7 +11,7 @@
  *    with a zero-model-call handoff template, plus the wrap-up reminder.
  * @module @dsh-external/dsh-auto-compact
  */
-import { cpSync, mkdirSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -97,6 +97,8 @@ export function apply(ctx: Context, config: unknown): void {
     ctx.logger.info(`${PLUGIN}: compaction slot occupied by ${holderName} — mounting tools + reminder only; rollover engine skipped (free the slot to enable it, see README)`)
   }
 
+  const pkgVersion = (() => { try { return (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown' } catch { return 'unknown' } })()
+
   // ── Status probe: durable, human-inspectable mount decision ──────────────
   // Ops surface for "which mode is dsh-auto-compact actually in?" — read
   // <dsh home>/dsh-auto-compact/engine-state.json after any boot.
@@ -107,7 +109,7 @@ export function apply(ctx: Context, config: unknown): void {
       join(stateDir, 'engine-state.json'),
       `${JSON.stringify({
         plugin: PLUGIN,
-        version: '0.0.7',
+        version: pkgVersion,
         engineMounted,
         slotHolder: engineMounted ? null : probe?.constructor?.name ?? 'unknown',
         auto: cfg.auto,
