@@ -74,7 +74,14 @@ export function apply(ctx: Context, config: unknown): void {
       const engine = new RolloverCompactionEngine(
         ctx as never,
         { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto },
-        { thresholdRatio: cfg.thresholdRatio, fallbackBufferTokens: cfg.fallbackBufferTokens, auto: cfg.auto, logger: ctx.logger },
+        {
+          thresholdRatio: cfg.thresholdRatio,
+          fallbackBufferTokens: cfg.fallbackBufferTokens,
+          auto: cfg.auto,
+          logger: ctx.logger,
+          onRollover: (info) => writeState({ rolloverCount: (runtimeState.rolloverCount as number) + 1, lastRolloverAt: new Date().toISOString(), lastRolloverTrigger: info.trigger }),
+          onBudgetDegraded: (failures) => writeState({ budgetDegraded: true, budgetConsecutiveFailures: failures }),
+        },
         pending,
       )
       // basic's constructor registers its listeners on the current fiber; expose a
@@ -99,30 +106,38 @@ export function apply(ctx: Context, config: unknown): void {
 
   const pkgVersion = (() => { try { return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown' } catch { return 'unknown' } })()
 
-  // ── Status probe: durable, human-inspectable mount decision ──────────────
-  // Ops surface for "which mode is dsh-auto-compact actually in?" — read
-  // <dsh home>/dsh-auto-compact/engine-state.json after any boot.
-  try {
-    const stateDir = dshHomePath(PLUGIN)
-    mkdirSync(stateDir, { recursive: true })
-    writeFileSync(
-      join(stateDir, 'engine-state.json'),
-      `${JSON.stringify({
-        plugin: PLUGIN,
-        version: pkgVersion,
-        engineMounted,
-        slotHolder: engineMounted ? null : probe?.constructor?.name ?? 'unknown',
-        auto: cfg.auto,
-        thresholdRatio: cfg.thresholdRatio,
-        fallbackBufferTokens: cfg.fallbackBufferTokens,
-        notesDir: notesRoot,
-        armedAt: new Date().toISOString(),
-      }, null, 2)}\n`,
-      'utf8',
-    )
-  } catch (error) {
-    ctx.logger.warn(`${PLUGIN}: could not write engine-state.json: ${(error as Error).message}`)
+  // ── Status probe: durable, human-inspectable RUNTIME state ───────────────
+  // Ops surface for "is dsh-auto-compact actually working?" — read
+  // <dsh home>/dsh-auto-compact/engine-state.json at any time. The file is a
+  // live record: mount decision at boot, rollover count as sessions proceed,
+  // and a budgetDegraded flag when measurement keeps failing (the携程-session
+  // gap: silent degradation made "is it working?" unanswerable).
+  const stateFile = join(dshHomePath(PLUGIN), 'engine-state.json')
+  const runtimeState: Record<string, unknown> = {
+    plugin: PLUGIN,
+    version: pkgVersion,
+    engineMounted: false,
+    slotHolder: null,
+    auto: cfg.auto,
+    thresholdRatio: cfg.thresholdRatio,
+    fallbackBufferTokens: cfg.fallbackBufferTokens,
+    notesDir: notesRoot,
+    rolloverCount: 0,
+    lastRolloverAt: null,
+    lastRolloverTrigger: null,
+    budgetDegraded: false,
+    budgetConsecutiveFailures: 0,
+    armedAt: new Date().toISOString(),
   }
+  const writeState = (patch: Record<string, unknown>): void => {
+    try {
+      Object.assign(runtimeState, patch)
+      writeFileSync(stateFile, `${JSON.stringify(runtimeState, null, 2)}\n`, 'utf8')
+    } catch (error) {
+      ctx.logger.warn(`${PLUGIN}: could not write engine-state.json: ${(error as Error).message}`)
+    }
+  }
+  writeState({ engineMounted, slotHolder: engineMounted ? null : probe?.constructor?.name ?? 'unknown' })
 
   const getBudget = (session: object) => {
     const agent = session as AgentLike

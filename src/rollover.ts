@@ -22,6 +22,10 @@ export interface RolloverEngineConfig {
   fallbackBufferTokens: number
   auto: boolean
   logger: { info(msg: string): void; warn(msg: string): void; debug(msg: string): void }
+  /** Called after each successful rollover (ops observability). */
+  onRollover?: (info: { generation: number; trigger: string }) => void
+  /** Called when budget measurement fails repeatedly (degraded visibility). */
+  onBudgetDegraded?: (consecutiveFailures: number) => void
 }
 
 interface BasicEngineConfigInput {
@@ -39,18 +43,28 @@ export function windowGeneration(events: ReadonlyArray<{ type: string }> | undef
 }
 
 const ROLLOVER_TEMPLATE_MARKER = '[auto-compact rollover]'
+/** Consecutive budget-measurement failures before the degraded signal fires. */
+const BUDGET_DEGRADED_AFTER = 5
 
 export class RolloverCompactionEngine extends BasicCompactionEngine {
   private readonly pending: PendingRollover
   private readonly rolloverCfg: RolloverEngineConfig
   private readonly ownCtx: CtxLike
   private remindedGeneration = new WeakMap<object, number>()
+  private budgetFailures = new WeakMap<object, number>()
 
   constructor(ctx: CtxLike, config: BasicEngineConfigInput, rolloverCfg: RolloverEngineConfig, pending: PendingRollover) {
     super(ctx as never, config)
     this.ownCtx = ctx
     this.rolloverCfg = rolloverCfg
     this.pending = pending
+  }
+
+  private noteRollover(agent: { session: { events?: ReadonlyArray<{ type: string }> } }, trigger: string): void {
+    const generation = windowGeneration(agent.session.events)
+    try {
+      this.rolloverCfg.onRollover?.({ generation, trigger })
+    } catch { /* observability must never break the compaction path */ }
   }
 
   /**
@@ -86,21 +100,36 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     const forced = consumeRollover(this.pending, agent.session)
     if (forced) {
       this.rolloverCfg.logger.info('dsh-auto-compact: new_context request consumed — forcing rollover before the next step')
-      return super.compactIfNeeded(agent as never, trigger as never, signal as never)
+      const result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
+      if (result !== null) this.noteRollover(agent, 'new_context')
+      return result
     }
     if (trigger === 'pressure') {
       let budget
       try {
         budget = await measureBudget(this.ownCtx, agent, signal)
+        this.budgetFailures.delete(agent.session)
       } catch (error) {
-        this.rolloverCfg.logger.warn(`dsh-auto-compact: budget measurement failed (${(error as Error).message}); skipping the grace-band check this step`)
+        const failures = (this.budgetFailures.get(agent.session) ?? 0) + 1
+        this.budgetFailures.set(agent.session, failures)
+        const tail = failures >= BUDGET_DEGRADED_AFTER
+          ? ' — BUDGET OBSERVABILITY DEGRADED: rollover thresholds are NOT being evaluated; check the model contextWindow config'
+          : '; retrying next step'
+        this.rolloverCfg.logger.warn(`dsh-auto-compact: budget measurement failed (${failures}x consecutive) (${(error as Error).message})${tail}`)
+        if (failures === BUDGET_DEGRADED_AFTER) {
+          try {
+            this.rolloverCfg.onBudgetDegraded?.(failures)
+          } catch { /* observability must never break the loop */ }
+        }
         return null
       }
       const thresholdTokens = budget.contextWindow * this.rolloverCfg.thresholdRatio
       if (budget.totalTokens < thresholdTokens) return null
       const forceAt = thresholdTokens + this.rolloverCfg.fallbackBufferTokens
       if (budget.totalTokens >= forceAt) {
-        return super.compactIfNeeded(agent as never, trigger as never, signal as never)
+        const result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
+        if (result !== null) this.noteRollover(agent, 'pressure')
+        return result
       }
       // Grace band: remind once per window generation, keep working.
       const generation = windowGeneration(agent.session.events)
@@ -112,6 +141,8 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
       }
       return null
     }
-    return super.compactIfNeeded(agent as never, trigger as never, signal as never)
+    const result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
+    if (result !== null) this.noteRollover(agent, trigger)
+    return result
   }
 }

@@ -1,10 +1,17 @@
 /**
- * Wrap-up reminder: one nudge per window generation while the session sits in
- * the pre-rollover grace band, injected through the system-prompt waterfall.
+ * Budget awareness: Codex-style tiered reminders injected through the
+ * system-prompt waterfall, plus a standing one-time tool briefing.
+ *
+ * Three layers (each fires at most once per session per tier, tracked in
+ * fiber-local WeakMaps — dispose drops all state):
+ *   1. briefing  — injected on the first assembled prompt: tells the model
+ *                  the mechanism exists at all (the携程-session gap: without
+ *                  it the model never touches the tools).
+ *   2. tiers     — at 25% / 50% / 75% context consumption, a short nudge.
+ *   3. grace     — remaining <= fallbackBufferTokens: write handoff notes now.
  * @module dsh-auto-compact/reminder
  */
-import type { AgentLike, BudgetSnapshot } from './budget.js'
-import { wrapUpAdvice } from './budget.js'
+import type { BudgetSnapshot } from './budget.js'
 
 interface AssembledLike {
   system?: string
@@ -13,7 +20,7 @@ interface AssembledLike {
 }
 
 export interface ReminderDeps {
-  /** Grace-band width in tokens; reminders fire while remaining <= this. */
+  /** Grace-band width in tokens; grace reminder fires while remaining <= this. */
   fallbackBufferTokens: number
   /** Live budget, or null when the model/window is unknown. */
   getBudget(session: object): Promise<BudgetSnapshot | null>
@@ -23,44 +30,90 @@ export interface ReminderDeps {
   pluginName: string
 }
 
+/** Consumption tiers as fractions of the context window (Codex-style). */
+export const TIERS: ReadonlyArray<{ fraction: number; label: string }> = [
+  { fraction: 0.25, label: '25%' },
+  { fraction: 0.5, label: '50%' },
+  { fraction: 0.75, label: '75%' },
+]
+
+export const BRIEFING = `[dsh-auto-compact] This session runs Codex-style context window management:
+- get_context_remaining: check your remaining context budget any time.
+- ctx_notes: your working notes (goal / decisions / next steps / where details live). Write here BEFORE context pressure hits — notes survive rollover.
+- ctx_history: after a rollover, recall exact original events (list windows, read seqs, search).
+- new_context: you may request a fresh window when the current one is no longer useful.
+Archive is lossless: nothing summarized away is ever lost.`
+
+export function tierNudge(usedFraction: number, label: string): string {
+  return `[dsh-auto-compact] Context consumption reached ${label} (${Math.round(usedFraction * 100)}% used). If key constraints and next steps are not in ctx_notes yet, write them now — a fresh window opens near the top of the range.`
+}
+
+export function graceNudge(remaining: number): string {
+  return `[dsh-auto-compact] LOW CONTEXT (${remaining} tokens remaining). Write your handoff state into ctx_notes NOW — goal, decisions, next steps, and where details live — before the automatic rollover.`
+}
+
 /**
- * Register the reminder on the system-prompt waterfall. One reminder per
- * window generation: state rides a WeakMap keyed by the generation counter,
- * so a rollover naturally re-arms it and dispose drops everything.
+ * Register the reminder on the system-prompt waterfall. All state is
+ * fiber-local (WeakMaps keyed by session), so unload drops everything and
+ * each session tracks its own tier progress independently.
  */
 export function attachReminder(
   ctx: { on(event: string, listener: (...args: unknown[]) => unknown): void },
   deps: ReminderDeps,
 ): void {
   let warnedNoField = false
-  const remindedGeneration = new WeakMap<object, number>()
+  const briefed = new WeakSet<object>()
+  const tiersDone = new WeakMap<object, Set<string>>()
+  const graceDone = new WeakMap<object, number>()
+
+  const appendTo = (assembled: AssembledLike, text: string): AssembledLike | null => {
+    if (typeof assembled?.system === 'string') return { ...assembled, system: `${assembled.system}\n\n${text}` }
+    if (typeof assembled?.developer === 'string') return { ...assembled, developer: `${assembled.developer}\n\n${text}` }
+    return null
+  }
 
   ctx.on('system-prompt/assemble', async (...args: unknown[]) => {
     const next = args[args.length - 1] as () => Promise<AssembledLike>
     const assembled = await next()
     try {
-      const context = (args.length >= 2 ? args[args.length - 2] : undefined) as { agent?: AgentLike } | undefined
-      const agent = context?.agent
-      if (!agent) return assembled
-      const budget = await deps.getBudget(agent.session)
-      if (!budget) return assembled
-      const advice = wrapUpAdvice(budget.remaining, deps.fallbackBufferTokens)
-      if (!advice) return assembled
-      const generation = deps.getWindowGeneration(agent.session)
-      if (remindedGeneration.get(agent.session) === generation) return assembled
-      remindedGeneration.set(agent.session, generation)
-      const reminder = `[${deps.pluginName}] Context budget low (${budget.remaining} of ${budget.contextWindow} tokens remaining). ${advice}`
-      if (typeof assembled?.system === 'string') {
-        return { ...assembled, system: `${assembled.system}\n\n${reminder}` }
+      const context = (args.length >= 2 ? args[args.length - 2] : undefined) as { agent?: { session?: object } } | undefined
+      const session = context?.agent?.session
+      if (!session) return assembled
+
+      const budget = await deps.getBudget(session)
+      if (!budget || budget.contextWindow <= 0) return assembled
+      const usedFraction = 1 - budget.remaining / budget.contextWindow
+
+      const pieces: string[] = []
+      if (!briefed.has(session)) {
+        briefed.add(session)
+        pieces.push(BRIEFING)
       }
-      if (typeof assembled?.developer === 'string') {
-        return { ...assembled, developer: `${assembled.developer}\n\n${reminder}` }
+      const done = tiersDone.get(session) ?? new Set<string>()
+      for (const tier of TIERS) {
+        if (usedFraction >= tier.fraction && !done.has(tier.label)) {
+          done.add(tier.label)
+          pieces.push(tierNudge(usedFraction, tier.label))
+        }
       }
+      tiersDone.set(session, done)
+      if (budget.remaining <= deps.fallbackBufferTokens) {
+        const generation = deps.getWindowGeneration(session)
+        if (graceDone.get(session) !== generation) {
+          graceDone.set(session, generation)
+          pieces.push(graceNudge(budget.remaining))
+        }
+      }
+      if (pieces.length === 0) return assembled
+
+      const text = pieces.join('\n\n')
+      const patched = appendTo(assembled, text)
+      if (patched) return patched
       if (!warnedNoField) {
         warnedNoField = true
         deps.logger.warn(`[${deps.pluginName}] reminder could not find a system/developer field on the assembled prompt; falling back to log-only reminders`)
       }
-      deps.logger.info(reminder)
+      deps.logger.info(text)
       return assembled
     } catch (error) {
       deps.logger.warn(`[${deps.pluginName}] reminder pass failed: ${(error as Error).message}; continuing with the unmodified prompt`)
