@@ -100,7 +100,15 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     const forced = consumeRollover(this.pending, agent.session)
     if (forced) {
       this.rolloverCfg.logger.info('dsh-auto-compact: new_context request consumed — forcing rollover before the next step')
-      const result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
+      // A pending request is an explicit instruction. The regular pressure
+      // bands can legitimately refuse (e.g. the tool-result pruner already
+      // pulled usage below the threshold — observed end-to-end) — when that
+      // happens, fall back to the overflow path which bypasses thresholds
+      // (retain = 0) so an explicit request is never silently swallowed.
+      let result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
+      if (result === null) {
+        result = await super.compactIfNeeded(agent as never, 'context-overflow' as never, signal as never)
+      }
       if (result !== null) this.noteRollover(agent, 'new_context')
       return result
     }

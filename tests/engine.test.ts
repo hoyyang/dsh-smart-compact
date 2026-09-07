@@ -117,18 +117,21 @@ describe('RolloverCompactionEngine.compactIfNeeded — three-band policy', () =>
     superSpy.mockRestore()
   })
 
-  it('new_context request is consumed exactly once and forces delegation', async () => {
+  it('new_context request is consumed exactly once and never silently swallowed', async () => {
     const ctx = makeFakeCtx(10_000) // quiet band — only a pending request can force
     const { engine, pending } = makeEngine(ctx)
-    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded').mockResolvedValue(null)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValueOnce(null)          // pressure path refuses (pruner pulled usage below threshold)
+      .mockResolvedValueOnce({ shadowedSeqs: [0, 1] })  // overflow fallback MUST run
     const agent = makeAgent()
     requestRollover(pending, agent as never)
     await engine.compactIfNeeded(agent as never, 'pressure', undefined)
-    expect(superSpy).toHaveBeenCalledTimes(1)
+    expect(superSpy).toHaveBeenCalledTimes(2)
+    expect((superSpy.mock.calls[1] as unknown[])[1]).toBe('context-overflow') // fallback trigger
     expect(consumeRollover(pending, agent.session)).toBe(false) // consumed once
     // second step: no pending request, quiet band, no delegation
     await engine.compactIfNeeded(agent as never, 'pressure', undefined)
-    expect(superSpy).toHaveBeenCalledTimes(1)
+    expect(superSpy).toHaveBeenCalledTimes(2)
     superSpy.mockRestore()
   })
 
@@ -141,13 +144,12 @@ describe('RolloverCompactionEngine.compactIfNeeded — three-band policy', () =>
     expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('budget measurement failed'))
   })
 
-  it('auto=false keeps manual/overflow paths but never registers new_context consumption', async () => {
+  it('auto=false keeps manual/overflow paths (no new_context tool exists to arm pending)', async () => {
     const ctx = makeFakeCtx(95_000)
-    const { engine, pending } = makeEngine(ctx, { auto: false })
+    const { engine } = makeEngine(ctx, { auto: false })
     const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded').mockResolvedValue(null)
     const agent = makeAgent()
-    requestRollover(pending, agent as never)
-    // pressure trigger goes straight to super regardless of pending (auto off)
+    // pressure trigger goes straight to super (no bands, no consumption)
     await engine.compactIfNeeded(agent as never, 'pressure', undefined)
     expect(superSpy).toHaveBeenCalledTimes(1)
     superSpy.mockRestore()
