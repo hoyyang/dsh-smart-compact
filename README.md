@@ -39,6 +39,7 @@ When the context approaches its limit (85% by default), the engine does not writ
 | `enabled` | `true` | 总开关；false 时插件完全静默 |
 | `auto` | `true` | 自动换窗 + 提醒 + new_context；false 时仅手动 /compact 走换窗 |
 | `thresholdRatio` | `0.85` | 进入缓冲带的窗口占比 |
+| `retainRatio` | `0.16`（引擎默认） | 换窗后保留的最近上下文占比；必须小于 `thresholdRatio` |
 | `fallbackBufferTokens` | `8192` | 缓冲带宽度；超过即强制换窗 |
 | `maxToolOutputTokens` | `8192` | 单次工具输出截断上限 |
 | `notesDir` | `<dsh home>/dsh-auto-compact/notes` | 笔记存储目录 |
@@ -61,8 +62,9 @@ Uninstall removes every tool, listener, and engine with the plugin fiber; notes 
 
 ## Verification status 验证声明
 
-- Vitest 单元测试覆盖：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费、生命周期幂等。
-- 隔离 staging 环境通过 `dsh --dump-config` 组合预检后才允许转正；本 README 所述行为与源码一致。
+- Vitest 38 项单元测试：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒。
+- **端到端实证（staging 隔离，真实模型 glm-5.3-flash）**：模型依次调用 `get_context_remaining` → `ctx_notes`（写交接笔记）→ `new_context` → `ctx_history` 全链路成功；`new_context` 触发真实 rollover（`rolloverCount: 1`），`ctx_history` 回读到已归档窗口（window #1, ~5965 tokens archived）。
+- 隔离 staging 环境通过 `dsh --dump-config` 组合预检 + 真 boot 后才允许转正；运行模式用 `engine-state.json` 探针可查。
 
 ## License
 
