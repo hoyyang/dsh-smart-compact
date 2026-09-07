@@ -65,7 +65,7 @@ export function apply(ctx: Context, config: unknown): void {
   try {
     const engine = new RolloverCompactionEngine(
       ctx as never,
-      { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto },
+      { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto, ...(cfg.retainRatio === undefined ? {} : { retainRatio: cfg.retainRatio }) },
       {
         thresholdRatio: cfg.thresholdRatio,
         fallbackBufferTokens: cfg.fallbackBufferTokens,

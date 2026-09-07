@@ -17,6 +17,8 @@ export interface ResolvedConfig {
   maxToolOutputTokens: number
   /** Root directory for per-session notes files. */
   notesDir: string
+  /** Retained recent-context fraction handed to the compaction engine (basic default 0.16). */
+  retainRatio?: number
 }
 
 export const Config = z.object({
@@ -37,6 +39,7 @@ export function resolveConfig(config: unknown): ResolvedConfig {
   const fallbackBufferTokens = raw.fallbackBufferTokens ?? 8192
   const maxToolOutputTokens = raw.maxToolOutputTokens ?? 8192
   const notesDir = raw.notesDir
+  const retainRatio = raw.retainRatio
   if (typeof enabled !== 'boolean') throw new Error('dsh-auto-compact: `enabled` must be a boolean')
   if (typeof auto !== 'boolean') throw new Error('dsh-auto-compact: `auto` must be a boolean')
   if (typeof thresholdRatio !== 'number' || !Number.isFinite(thresholdRatio) || thresholdRatio <= 0 || thresholdRatio >= 1) {
@@ -51,7 +54,13 @@ export function resolveConfig(config: unknown): ResolvedConfig {
   if (notesDir !== undefined && (typeof notesDir !== 'string' || notesDir.length === 0)) {
     throw new Error('dsh-auto-compact: `notesDir` must be a non-empty string when provided')
   }
-  return { enabled, auto, thresholdRatio, fallbackBufferTokens, maxToolOutputTokens, notesDir } as ResolvedConfig
+  if (retainRatio !== undefined && (typeof retainRatio !== 'number' || !Number.isFinite(retainRatio) || retainRatio <= 0 || retainRatio >= 1)) {
+    throw new Error(`dsh-auto-compact: \`retainRatio\` must be a number in (0, 1), got ${String(retainRatio)}`)
+  }
+  if (retainRatio !== undefined && typeof thresholdRatio === 'number' && retainRatio >= thresholdRatio) {
+    throw new Error(`dsh-auto-compact: \`retainRatio\` (${retainRatio}) must be less than \`thresholdRatio\` (${thresholdRatio})`)
+  }
+  return { enabled, auto, thresholdRatio, fallbackBufferTokens, maxToolOutputTokens, notesDir, retainRatio } as ResolvedConfig
 }
 
 /** Rough char→token estimate used only for tool-output truncation budgets. */
