@@ -9,14 +9,14 @@ interface Harness {
   assemble(session: object | undefined, assembled?: Record<string, unknown>): Promise<Record<string, unknown>>
 }
 
-function makeHarness(budget: BudgetSnapshot | null, opts?: { fallbackBufferTokens?: number; getWindowGeneration?: () => number }): Harness {
+function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts?: { fallbackBufferTokens?: number; getWindowGeneration?: () => number }): Harness {
   const listeners = new Map<string, Array<(...args: unknown[]) => unknown>>()
   const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
   attachReminder(
     { on: (event: string, listener: (...args: unknown[]) => unknown) => { const b = listeners.get(event) ?? []; b.push(listener); listeners.set(event, b) } },
     {
       fallbackBufferTokens: opts?.fallbackBufferTokens ?? 8192,
-      getBudget: async (session: object) => (session ? budget : null),
+      getBudget: async (session: object) => (session ? (typeof budgetSource === 'function' ? budgetSource() : budgetSource) : null),
       getWindowGeneration: opts?.getWindowGeneration ?? (() => 0),
       logger,
       pluginName: 'dsh-auto-compact',
@@ -26,7 +26,7 @@ function makeHarness(budget: BudgetSnapshot | null, opts?: { fallbackBufferToken
   return {
     listeners,
     logger,
-    assemble: (session, assembled = { system: 'BASE' }) => waterfall({ agent: session ? { session } : undefined }, assembled, async () => assembled) as Promise<Record<string, unknown>>,
+    assemble: (session, assembled = { system: 'BASE' }) => waterfall({}, { agent: session ? { session } : undefined }, async () => assembled) as Promise<Record<string, unknown>>,
   }
 }
 
@@ -47,7 +47,7 @@ describe('attachReminder — tiered budget awareness', () => {
 
   it('fires each tier exactly once as consumption crosses 25/50/75%', async () => {
     let total = 10_000
-    const h = makeHarness(budget(total))
+    const h = makeHarness(() => budget(total))
     await h.assemble(session) // briefing consumed at low usage
     // cross 25% → tier fires once, then stays quiet at the same level
     total = 26_000
@@ -91,7 +91,7 @@ describe('attachReminder — tiered budget awareness', () => {
       { fallbackBufferTokens: 8192, getBudget: async () => { throw new Error('meter exploded') }, getWindowGeneration: () => 0, logger, pluginName: 'dsh-auto-compact' },
     )
     const waterfall = listeners.get('system-prompt/assemble')![0]!
-    const out = await waterfall({ agent: { session } }, { system: 'BASE' }, async () => ({ system: 'BASE' })) as Record<string, unknown>
+    const out = await waterfall({ system: 'BASE' }, { agent: { session } }, async () => ({ system: 'BASE' })) as Record<string, unknown>
     expect(String(out.system)).toBe('BASE')
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('reminder pass failed'))
   })
