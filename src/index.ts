@@ -54,54 +54,46 @@ export function apply(ctx: Context, config: unknown): void {
 
   // ── Engine (rollover compaction) — polite slot acquisition ───────────────
   // The `compaction` service is a single slot (dsh-glm's GlmCompactionEngine,
-  // kiro, compaction-basic all mount there). Yield when occupied: tools and
-  // the reminder still work against whatever engine owns the slot (they read
-  // the same compaction/summary events), and the rollover engine mounts only
-  // when the slot is free. Detection is two-layer: a get() probe first, then
-  // a construction catch — cordis registers services lazily, so the probe can
-  // miss a declared-but-not-yet-instantiated engine while the Service
-  // constructor's provide() still collides.
-  const probe = (() => {
-    try {
-      return ctx.get('compaction') as { constructor?: { name?: string } } | undefined
-    } catch {
-      return undefined
-    }
-  })()
-  let engineMounted = probe === undefined
-  if (engineMounted) {
-    try {
-      const engine = new RolloverCompactionEngine(
-        ctx as never,
-        { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto },
-        {
-          thresholdRatio: cfg.thresholdRatio,
-          fallbackBufferTokens: cfg.fallbackBufferTokens,
-          auto: cfg.auto,
-          logger: ctx.logger,
-          onRollover: (info) => writeState({ rolloverCount: (runtimeState.rolloverCount as number) + 1, lastRolloverAt: new Date().toISOString(), lastRolloverTrigger: info.trigger }),
-          onBudgetDegraded: (failures) => writeState({ budgetDegraded: true, budgetConsecutiveFailures: failures }),
-        },
-        pending,
-      )
-      // basic's constructor registers its listeners on the current fiber; expose a
-      // defensive dispose for hosts that require one.
-      ctx.effect(() => () => {
-        ctx.logger.debug(`${PLUGIN}: engine listeners are fiber-managed and dropped with this plugin`)
-      }, `${PLUGIN}: rollover engine`)
-      void engine
-    } catch (error) {
-      const message = (error as Error).message ?? ''
-      if (/service ["']?compaction["']? has been registered/i.test(message)) {
-        engineMounted = false
-      } else {
-        throw error
-      }
+  // kiro, compaction-basic all mount there). Detection is construction-catch
+  // ONLY: a ctx.get('compaction') probe would itself force-instantiate a
+  // lazily-declared engine on an otherwise clean profile and occupy the slot
+  // against ourselves (observed on headless — the probe is self-defeating).
+  // When the constructor's provide() collides with an existing owner, we
+  // yield and fall back to tools+reminder mode.
+  let engineMounted = true
+  let slotHolder = 'unknown'
+  try {
+    const engine = new RolloverCompactionEngine(
+      ctx as never,
+      { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto },
+      {
+        thresholdRatio: cfg.thresholdRatio,
+        fallbackBufferTokens: cfg.fallbackBufferTokens,
+        auto: cfg.auto,
+        logger: ctx.logger,
+        onRollover: (info) => writeState({ rolloverCount: (runtimeState.rolloverCount as number) + 1, lastRolloverAt: new Date().toISOString(), lastRolloverTrigger: info.trigger }),
+        onBudgetDegraded: (failures) => writeState({ budgetDegraded: true, budgetConsecutiveFailures: failures }),
+      },
+      pending,
+    )
+    // basic's constructor registers its listeners on the current fiber; expose a
+    // defensive dispose for hosts that require one.
+    ctx.effect(() => () => {
+      ctx.logger.debug(`${PLUGIN}: engine listeners are fiber-managed and dropped with this plugin`)
+    }, `${PLUGIN}: rollover engine`)
+    void engine
+  } catch (error) {
+    const message = (error as Error).message ?? ''
+    const holderMatch = /has been registered at <([^>]+)>/.exec(message)
+    if (/service ["']?compaction["']? has been registered/i.test(message)) {
+      engineMounted = false
+      slotHolder = holderMatch?.[1] ?? 'another compaction engine'
+    } else {
+      throw error
     }
   }
   if (!engineMounted) {
-    const holderName = probe?.constructor?.name ?? 'another compaction engine'
-    ctx.logger.info(`${PLUGIN}: compaction slot occupied by ${holderName} — mounting tools + reminder only; rollover engine skipped (free the slot to enable it, see README)`)
+    ctx.logger.info(`${PLUGIN}: compaction slot occupied by ${slotHolder} — mounting tools + reminder only; rollover engine skipped (free the slot to enable it, see README)`)
   }
 
   const pkgVersion = (() => { try { return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown' } catch { return 'unknown' } })()
@@ -137,7 +129,7 @@ export function apply(ctx: Context, config: unknown): void {
       ctx.logger.warn(`${PLUGIN}: could not write engine-state.json: ${(error as Error).message}`)
     }
   }
-  writeState({ engineMounted, slotHolder: engineMounted ? null : probe?.constructor?.name ?? 'unknown' })
+  writeState({ engineMounted, slotHolder: engineMounted ? null : slotHolder })
 
   const getBudget = (session: object) => {
     const agent = session as AgentLike

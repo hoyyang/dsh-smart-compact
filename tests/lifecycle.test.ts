@@ -116,11 +116,15 @@ describe('apply() lifecycle', () => {
     expect(registered).toHaveLength(4)
   })
 
-  it('yields the compaction slot politely when another engine owns it', async () => {
+  it('yields the compaction slot politely when construction collides with an existing owner', async () => {
     const { ctx, registered, listeners } = makeCtx()
-    ;(ctx as unknown as { get: (key: string) => unknown }).get = vi.fn((key: string) =>
-      key === 'compaction' ? { constructor: { name: 'GlmCompactionEngine' } } : undefined,
-    )
+    // Simulate cordis: the Service constructor's provide() collides on the
+    // occupied slot — the collision error names the holder.
+    ;(ctx as unknown as { reflect: { provide: (name: string) => void } }).reflect = {
+      provide: (name: string) => {
+        if (name === 'compaction') throw new Error('service "compaction" has been registered at <GlmCompactionEngine>')
+      },
+    }
     apply(ctx, { notesDir: await notesDir() })
     // tools minus new_context still mount; no engine listeners; loud notice logged
     expect(registered.map((t) => t.name).sort()).toEqual(['ctx_history', 'ctx_notes', 'get_context_remaining'])
