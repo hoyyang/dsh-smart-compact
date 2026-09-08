@@ -72,7 +72,7 @@ describe('RolloverCompactionEngine.summarize — the zero-model-call handoff', (
     const result = await engine.summarize({}, agent as never, undefined)
     expect(result.summary).toHaveLength(1)
     expect(result.summary[0].type).toBe('text')
-    expect(result.summary[0].text).toContain('[auto-compact rollover]')
+    expect(result.summary[0].text).toContain('[smart-compact rollover]')
     expect(result.summary[0].text).toContain('ctx_notes')
     expect(result.summary[0].text).toContain('ctx_history')
     expect(result).toMatchObject({ provider: 'rollover-template', model: 'none' })

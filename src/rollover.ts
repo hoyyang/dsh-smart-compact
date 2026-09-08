@@ -10,7 +10,7 @@
  * Registration (agent/pre-step, agent/request-error) and the whole durable
  * compaction transaction (compaction/start|summary|end, tool-pairing balance)
  * are inherited from basic and dispatch dynamically to these overrides.
- * @module dsh-auto-compact/rollover
+ * @module dsh-smart-compact/rollover
  */
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -42,7 +42,7 @@ export function windowGeneration(events: ReadonlyArray<{ type: string }> | undef
   return events.filter((e) => e.type === 'compaction/summary').length
 }
 
-const ROLLOVER_TEMPLATE_MARKER = '[auto-compact rollover]'
+const ROLLOVER_TEMPLATE_MARKER = '[smart-compact rollover]'
 /** Consecutive budget-measurement failures before the degraded signal fires. */
 const BUDGET_DEGRADED_AFTER = 5
 
@@ -99,7 +99,7 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
   override async compactIfNeeded(agent: AgentLike, trigger: string, signal?: AbortSignal) {
     const forced = consumeRollover(this.pending, agent.session)
     if (forced) {
-      this.rolloverCfg.logger.info('dsh-auto-compact: new_context request consumed — forcing rollover before the next step')
+      this.rolloverCfg.logger.info('dsh-smart-compact: new_context request consumed — forcing rollover before the next step')
       // A pending request is an explicit instruction. The regular pressure
       // bands can legitimately refuse (e.g. the tool-result pruner already
       // pulled usage below the threshold — observed end-to-end) — when that
@@ -123,7 +123,7 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
         const tail = failures >= BUDGET_DEGRADED_AFTER
           ? ' — BUDGET OBSERVABILITY DEGRADED: rollover thresholds are NOT being evaluated; check the model contextWindow config'
           : '; retrying next step'
-        this.rolloverCfg.logger.warn(`dsh-auto-compact: budget measurement failed (${failures}x consecutive) (${(error as Error).message})${tail}`)
+        this.rolloverCfg.logger.warn(`dsh-smart-compact: budget measurement failed (${failures}x consecutive) (${(error as Error).message})${tail}`)
         if (failures === BUDGET_DEGRADED_AFTER) {
           try {
             this.rolloverCfg.onBudgetDegraded?.(failures)
@@ -144,7 +144,7 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
       if (this.remindedGeneration.get(agent.session) !== generation) {
         this.remindedGeneration.set(agent.session, generation)
         this.rolloverCfg.logger.info(
-          `dsh-auto-compact: grace band entered (${budget.totalTokens}/${budget.contextWindow} tokens, forced rollover at ${Math.round(forceAt)}) — the model should write ctx_notes now`,
+          `dsh-smart-compact: grace band entered (${budget.totalTokens}/${budget.contextWindow} tokens, forced rollover at ${Math.round(forceAt)}) — the model should write ctx_notes now`,
         )
       }
       return null

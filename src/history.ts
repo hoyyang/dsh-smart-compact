@@ -2,7 +2,7 @@
  * ctx_history: recall original session content archived by rollover.
  * Reads the durable session event stream directly — zero new storage; the
  * compaction/summary event's shadowedSeqs point back at the original events.
- * @module dsh-auto-compact/history
+ * @module dsh-smart-compact/history
  */
 import { truncateToTokens } from './config.js'
 
@@ -87,13 +87,13 @@ export class SessionArchiveReader {
 
   /** Project original events by seq (most useful: those inside shadowed spans). */
   readSeqs(seqs: number[]): string {
-    if (seqs.length === 0) throw new Error('dsh-auto-compact: ctx_history read requires at least one seq')
+    if (seqs.length === 0) throw new Error('dsh-smart-compact: ctx_history read requires at least one seq')
     const bySeq = new Map(this.events.map((e) => [e.seq, e]))
     const parts: string[] = []
     let budget = this.maxOutputTokens
     for (const seq of seqs) {
       const event = bySeq.get(seq)
-      if (!event) throw new Error(`dsh-auto-compact: no archived event with seq ${seq} in this session (events run 0..${Math.max(0, this.events.length - 1)})`)
+      if (!event) throw new Error(`dsh-smart-compact: no archived event with seq ${seq} in this session (events run 0..${Math.max(0, this.events.length - 1)})`)
       const text = truncateToTokens(eventText(event), Math.min(budget, this.maxOutputTokens), `ctx_history read seq ${seq}`)
       parts.push(`── seq ${seq} · ${event.type} ──\n${text}`)
       budget -= Math.ceil(text.length / 4)
@@ -105,7 +105,7 @@ export class SessionArchiveReader {
   /** Case-folded substring search over the whole stream; returns a compact hit list, never full bodies. */
   search(keyword: string, archivedOnly = true): string {
     const needle = keyword.trim().toLowerCase()
-    if (needle === '') throw new Error('dsh-auto-compact: ctx_history search requires a non-empty keyword')
+    if (needle === '') throw new Error('dsh-smart-compact: ctx_history search requires a non-empty keyword')
     const archived = new Set(this.listWindows().flatMap((w) => w.shadowedSeqs))
     const hits: EventHit[] = []
     for (const event of this.events) {

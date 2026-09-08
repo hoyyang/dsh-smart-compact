@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-auto-compact — Codex-style context window auto-management.
+ * @dsh-external/dsh-smart-compact — Codex-style context window auto-management.
  *
  * Five components, all wired inside apply() so a fiber dispose removes every
  * one of them (lifecycle hygiene: no module-level state, no leaked listeners):
@@ -9,7 +9,7 @@
  *  4. new_context           — model-initiated fresh window request
  *  5. RolloverCompactionEngine — threshold/overflow/new_context window switch
  *    with a zero-model-call handoff template, plus the wrap-up reminder.
- * @module @dsh-external/dsh-auto-compact
+ * @module @dsh-external/dsh-smart-compact
  */
 import { cpSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -27,13 +27,14 @@ import { measureBudget, resolveModelTarget, wrapUpAdvice, type AgentLike } from 
 import { requestRollover, consumeRollover, type PendingRollover } from './new-context.js'
 import { attachReminder } from './reminder.js'
 import { RolloverCompactionEngine } from './rollover.js'
+import { registerSmartCompactCommand } from './command.js'
 
-export const name = '@dsh-external/dsh-auto-compact'
-export const inject = ['tools', 'llm', 'tokenMeter', 'sessions']
+export const name = '@dsh-external/dsh-smart-compact'
+export const inject = ['tools', 'commands', 'llm', 'tokenMeter', 'sessions']
 
 export { Config } from './config.js'
 
-const PLUGIN = 'dsh-auto-compact'
+const PLUGIN = 'dsh-smart-compact'
 
 /** Require an agent-backed execution; tools are meaningless without a session. */
 function requireAgent(exec: { agent?: unknown }, toolName: string): AgentLike {
@@ -62,8 +63,9 @@ export function apply(ctx: Context, config: unknown): void {
   // yield and fall back to tools+reminder mode.
   let engineMounted = true
   let slotHolder = 'unknown'
+  let engine: RolloverCompactionEngine | null = null
   try {
-    const engine = new RolloverCompactionEngine(
+    engine = new RolloverCompactionEngine(
       ctx as never,
       { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto, ...(cfg.retainRatio === undefined ? {} : { retainRatio: cfg.retainRatio }) },
       {
@@ -96,11 +98,17 @@ export function apply(ctx: Context, config: unknown): void {
     ctx.logger.info(`${PLUGIN}: compaction slot occupied by ${slotHolder} — mounting tools + reminder only; rollover engine skipped (free the slot to enable it, see README)`)
   }
 
+  // ── Command: /smart-compact (100% lossless window switch) ────────────────
+  registerSmartCompactCommand(
+    ctx as never,
+    { engine: engineMounted ? engine : null, slotHolder: engineMounted ? slotHolder : undefined, logger: ctx.logger },
+  )
+
   const pkgVersion = (() => { try { return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown' } catch { return 'unknown' } })()
 
   // ── Status probe: durable, human-inspectable RUNTIME state ───────────────
-  // Ops surface for "is dsh-auto-compact actually working?" — read
-  // <dsh home>/dsh-auto-compact/engine-state.json at any time. The file is a
+  // Ops surface for "is dsh-smart-compact actually working?" — read
+  // <dsh home>/dsh-smart-compact/engine-state.json at any time. The file is a
   // live record: mount decision at boot, rollover count as sessions proceed,
   // and a budgetDegraded flag when measurement keeps failing (the携程-session
   // gap: silent degradation made "is it working?" unanswerable).

@@ -1,7 +1,7 @@
 /**
  * ctx_notes: per-session working notes that survive compaction and rollover.
  * Storage is one markdown file per session; every mutation is atomic.
- * @module dsh-auto-compact/notes
+ * @module dsh-smart-compact/notes
  */
 import { mkdir, readFile, rename, appendFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -10,7 +10,7 @@ import { estimateTokens, truncateToTokens } from './config.js'
 /** Make a session id safe to embed in a filesystem path. */
 export function sanitizeSessionId(sessionId: string): string {
   const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, '_')
-  if (safe.length === 0) throw new Error('dsh-auto-compact: session id sanitized to an empty string')
+  if (safe.length === 0) throw new Error('dsh-smart-compact: session id sanitized to an empty string')
   return safe
 }
 
@@ -53,7 +53,7 @@ export class NotesStore {
       return await readFile(this.fileFor(sessionId), 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
-      throw new Error(`dsh-auto-compact: cannot read notes for session ${sanitizeSessionId(sessionId)}: ${(error as Error).message}`)
+      throw new Error(`dsh-smart-compact: cannot read notes for session ${sanitizeSessionId(sessionId)}: ${(error as Error).message}`)
     }
   }
 
@@ -68,7 +68,7 @@ export class NotesStore {
       await writeFile(tmp, body, 'utf8')
       await rename(tmp, file)
     } catch (error) {
-      throw new Error(`dsh-auto-compact: cannot write notes for session ${sanitizeSessionId(sessionId)} at ${this.root}: ${(error as Error).message}`)
+      throw new Error(`dsh-smart-compact: cannot write notes for session ${sanitizeSessionId(sessionId)} at ${this.root}: ${(error as Error).message}`)
     }
   }
 
@@ -84,7 +84,7 @@ export class NotesStore {
       await appendFile(file, block, 'utf8')
       return nextIndex
     } catch (error) {
-      throw new Error(`dsh-auto-compact: cannot append notes for session ${sanitizeSessionId(sessionId)} at ${this.root}: ${(error as Error).message}`)
+      throw new Error(`dsh-smart-compact: cannot append notes for session ${sanitizeSessionId(sessionId)} at ${this.root}: ${(error as Error).message}`)
     }
   }
 
@@ -94,14 +94,14 @@ export class NotesStore {
     if (markdown === '') return '(notes are empty — write ctx_notes before the next rollover)'
     if (segmentIndex === undefined) return truncateToTokens(markdown.trim(), maxTokens, 'ctx_notes read')
     const segment = parseSegments(markdown).find((s) => s.index === segmentIndex)
-    if (!segment) throw new Error(`dsh-auto-compact: no notes segment #${segmentIndex} for session ${sanitizeSessionId(sessionId)} (valid: ${parseSegments(markdown).map((s) => s.index).join(',') || 'none'})`)
+    if (!segment) throw new Error(`dsh-smart-compact: no notes segment #${segmentIndex} for session ${sanitizeSessionId(sessionId)} (valid: ${parseSegments(markdown).map((s) => s.index).join(',') || 'none'})`)
     return truncateToTokens(`## notes ${segment.index} — ${segment.writtenAt} ${segment.title}\n${segment.text}`, maxTokens, `ctx_notes read #${segmentIndex}`)
   }
 
   /** Case-folded substring search across segments; returns segment headers plus matching lines. */
   async search(sessionId: string, keyword: string, maxTokens: number): Promise<string> {
     const needle = keyword.trim().toLowerCase()
-    if (needle === '') throw new Error('dsh-auto-compact: ctx_notes search requires a non-empty keyword')
+    if (needle === '') throw new Error('dsh-smart-compact: ctx_notes search requires a non-empty keyword')
     const segments = parseSegments(await this.readRaw(sessionId))
     const hits: string[] = []
     for (const segment of segments) {

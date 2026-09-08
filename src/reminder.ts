@@ -9,7 +9,7 @@
  *                  it the model never touches the tools).
  *   2. tiers     — at 25% / 50% / 75% context consumption, a short nudge.
  *   3. grace     — remaining <= fallbackBufferTokens: write handoff notes now.
- * @module dsh-auto-compact/reminder
+ * @module dsh-smart-compact/reminder
  */
 import type { BudgetSnapshot } from './budget.js'
 
@@ -37,7 +37,7 @@ export const TIERS: ReadonlyArray<{ fraction: number; label: string }> = [
   { fraction: 0.75, label: '75%' },
 ]
 
-export const BRIEFING = `[dsh-auto-compact] This session runs Codex-style context window management:
+export const BRIEFING = `[dsh-smart-compact] This session runs Codex-style context window management:
 - get_context_remaining: check your remaining context budget any time.
 - ctx_notes: your working notes (goal / decisions / next steps / where details live). Write here BEFORE context pressure hits — notes survive rollover.
 - ctx_history: after a rollover, recall exact original events (list windows, read seqs, search).
@@ -45,11 +45,11 @@ export const BRIEFING = `[dsh-auto-compact] This session runs Codex-style contex
 Archive is lossless: nothing summarized away is ever lost.`
 
 export function tierNudge(usedFraction: number, label: string): string {
-  return `[dsh-auto-compact] Context consumption reached ${label} (${Math.round(usedFraction * 100)}% used). If key constraints and next steps are not in ctx_notes yet, write them now — a fresh window opens near the top of the range.`
+  return `[dsh-smart-compact] Context consumption reached ${label} (${Math.round(usedFraction * 100)}% used). If key constraints and next steps are not in ctx_notes yet, write them now — a fresh window opens near the top of the range.`
 }
 
 export function graceNudge(remaining: number): string {
-  return `[dsh-auto-compact] LOW CONTEXT (${remaining} tokens remaining). Write your handoff state into ctx_notes NOW — goal, decisions, next steps, and where details live — before the automatic rollover.`
+  return `[dsh-smart-compact] LOW CONTEXT (${remaining} tokens remaining). Write your handoff state into ctx_notes NOW — goal, decisions, next steps, and where details live — before the automatic rollover.`
 }
 
 /**

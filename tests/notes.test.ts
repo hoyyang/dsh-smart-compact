@@ -26,7 +26,7 @@ describe('parseSegments', () => {
 
 describe('NotesStore', () => {
   async function makeStore() {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-auto-compact-notes-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-smart-compact-notes-'))
     return { store: new NotesStore(root), root }
   }
 

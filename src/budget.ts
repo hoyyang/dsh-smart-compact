@@ -1,6 +1,6 @@
 /**
  * get_context_remaining: expose the model's live context-window budget.
- * @module dsh-auto-compact/budget
+ * @module dsh-smart-compact/budget
  */
 
 /** Structural view of the pieces of Agent we consume (no hard peer import). */
@@ -33,7 +33,7 @@ export function resolveModelTarget(agent: AgentLike): ModelTarget {
   const provider = agent.options?.provider ?? header?.provider
   const model = agent.options?.model ?? header?.model
   if (!provider || !model) {
-    throw new Error(`dsh-auto-compact: cannot resolve the routed model for session ${agent.session.id} (no agent options and no request header)`)
+    throw new Error(`dsh-smart-compact: cannot resolve the routed model for session ${agent.session.id} (no agent options and no request header)`)
   }
   return { provider, model }
 }
@@ -52,7 +52,7 @@ export async function measureBudget(ctx: CtxLike, agent: AgentLike, signal?: Abo
   const info = await ctx.llm.resolveModelInfo(target.provider, target.model, signal)
   const contextWindow = info.context?.contextWindow
   if (typeof contextWindow !== 'number' || contextWindow <= 0) {
-    throw new Error(`dsh-auto-compact: no context window configured for model ${target.provider}/${target.model}; set contextWindow on that adapter model`)
+    throw new Error(`dsh-smart-compact: no context window configured for model ${target.provider}/${target.model}; set contextWindow on that adapter model`)
   }
   return {
     totalTokens: measurement.totalTokens,

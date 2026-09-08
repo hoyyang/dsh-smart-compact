@@ -1,4 +1,4 @@
-# dsh-auto-compact bundle patch: arms the Codex-style context window
+# dsh-smart-compact bundle patch: arms the Codex-style context window
 # auto-management (tools + rollover engine + reminder) on the profile.
 #
 # Mutually exclusive with compaction-basic's auto engine: keep
@@ -6,15 +6,15 @@
 #
 # Optional config keys (all optional, defaults shown in README):
 # - insert:
-#     - id: dsh-auto-compact
-#       name: '@dsh-external/dsh-auto-compact'
+#     - id: dsh-smart-compact
+#       name: '@dsh-external/dsh-smart-compact'
 #       config:
 #         enabled: true
 #         auto: true
 #         thresholdRatio: 0.85
 #         fallbackBufferTokens: 8192
 #         maxToolOutputTokens: 8192
-#         notesDir: /custom/path/dsh-auto-compact-notes
+#         notesDir: /custom/path/dsh-smart-compact-notes
 - insert:
-    - id: dsh-auto-compact
-      name: '@dsh-external/dsh-auto-compact'
+    - id: dsh-smart-compact
+      name: '@dsh-external/dsh-smart-compact'

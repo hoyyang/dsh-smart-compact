@@ -2,7 +2,7 @@
  * new_context: the model's escape hatch — request a fresh context window.
  * The request is parked on a session-keyed set and consumed at the next
  * agent/pre-step boundary, matching Codex's semantics (no mid-sample abort).
- * @module dsh-auto-compact/new-context
+ * @module dsh-smart-compact/new-context
  */
 import type { AgentLike } from './budget.js'
 

@@ -79,7 +79,7 @@ describe('wrapUpAdvice', () => {
 
 describe('apply() lifecycle', () => {
   async function notesDir() {
-    return mkdtemp(join(tmpdir(), 'dsh-auto-compact-apply-'))
+    return mkdtemp(join(tmpdir(), 'dsh-smart-compact-apply-'))
   }
 
   it('registers exactly four tools with auto=true and arms the engine', async () => {

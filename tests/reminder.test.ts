@@ -19,7 +19,7 @@ function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts
       getBudget: async (session: object) => (session ? (typeof budgetSource === 'function' ? budgetSource() : budgetSource) : null),
       getWindowGeneration: opts?.getWindowGeneration ?? (() => 0),
       logger,
-      pluginName: 'dsh-auto-compact',
+      pluginName: 'dsh-smart-compact',
     },
   )
   const waterfall = listeners.get('system-prompt/assemble')![0]!
@@ -38,7 +38,7 @@ describe('attachReminder — tiered budget awareness', () => {
     const h = makeHarness(budget(0))
     const first = await h.assemble(session)
     expect(String(first.system)).toContain('BASE')
-    expect(String(first.system)).toContain('[dsh-auto-compact]')
+    expect(String(first.system)).toContain('[dsh-smart-compact]')
     expect(String(first.system)).toContain('ctx_notes')
     expect(String(first.system)).toContain('ctx_history')
     const second = await h.assemble(session)
@@ -80,7 +80,7 @@ describe('attachReminder — tiered budget awareness', () => {
     const out = await h.assemble(session, {})
     expect(out.system).toBeUndefined()
     expect(h.logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not find a system/developer field'))
-    expect(h.logger.info).toHaveBeenCalledWith(expect.stringContaining('[dsh-auto-compact]'))
+    expect(h.logger.info).toHaveBeenCalledWith(expect.stringContaining('[dsh-smart-compact]'))
   })
 
   it('keeps the prompt intact when the reminder pass throws', async () => {
@@ -88,7 +88,7 @@ describe('attachReminder — tiered budget awareness', () => {
     const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
     attachReminder(
       { on: (e, l) => { const b = listeners.get(e) ?? []; b.push(l); listeners.set(e, b) } },
-      { fallbackBufferTokens: 8192, getBudget: async () => { throw new Error('meter exploded') }, getWindowGeneration: () => 0, logger, pluginName: 'dsh-auto-compact' },
+      { fallbackBufferTokens: 8192, getBudget: async () => { throw new Error('meter exploded') }, getWindowGeneration: () => 0, logger, pluginName: 'dsh-smart-compact' },
     )
     const waterfall = listeners.get('system-prompt/assemble')![0]!
     const out = await waterfall({ system: 'BASE' }, { agent: { session } }, async () => ({ system: 'BASE' })) as Record<string, unknown>

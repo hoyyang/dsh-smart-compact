@@ -1,4 +1,4 @@
-# dsh-auto-compact
+# dsh-smart-compact
 
 [![dsh-plugin](https://img.shields.io/badge/dsh-plugin-blue)](https://github.com/topic/dsh-plugin)
 
@@ -11,8 +11,8 @@ Give the model Codex CLI's new context strategy: live budget visibility, wrap-up
 ## Install / Update 安装与更新
 
 ```sh
-dsh plugin --profile web add @dsh-external/dsh-auto-compact
-dsh plugin --profile web update @dsh-external/dsh-auto-compact@latest
+dsh plugin --profile web add @dsh-external/dsh-smart-compact
+dsh plugin --profile web update @dsh-external/dsh-smart-compact@latest
 ```
 
 Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 即可。
@@ -42,18 +42,18 @@ When the context approaches its limit (85% by default), the engine does not writ
 | `retainRatio` | `0.16`（引擎默认） | 换窗后保留的最近上下文占比；必须小于 `thresholdRatio` |
 | `fallbackBufferTokens` | `8192` | 缓冲带宽度；超过即强制换窗 |
 | `maxToolOutputTokens` | `8192` | 单次工具输出截断上限 |
-| `notesDir` | `<dsh home>/dsh-auto-compact/notes` | 笔记存储目录 |
+| `notesDir` | `<dsh home>/dsh-smart-compact/notes` | 笔记存储目录 |
 
 ## Compatibility 兼容性
 
-- **单槽优先原则**：`compaction` 服务是单槽——本插件安装后默认**接管**该槽（rollover 换窗语义），要求在 profile bundles 里位于其它压缩引擎（dsh-glm / dsh-kiro / compaction-basic）**之前**。被让位的引擎（如 dsh-glm）凭其内置谦让检查自动跳过挂载，其余功能不受影响。可用状态探针确认当前模式：`cat <dsh home>/dsh-auto-compact/engine-state.json`（`engineMounted: true` = rollover 已接管；`false` = 槽被其它引擎占用，本插件仅提供工具与提醒）。
+- **单槽优先原则**：`compaction` 服务是单槽——本插件安装后默认**接管**该槽（rollover 换窗语义），要求在 profile bundles 里位于其它压缩引擎（dsh-glm / dsh-kiro / compaction-basic）**之前**。被让位的引擎（如 dsh-glm）凭其内置谦让检查自动跳过挂载，其余功能不受影响。可用状态探针确认当前模式：`cat <dsh home>/dsh-smart-compact/engine-state.json`（`engineMounted: true` = rollover 已接管；`false` = 槽被其它引擎占用，本插件仅提供工具与提醒）。
 - `/compact` 手动命令在本引擎在场时自动获得换窗语义（继承自官方引擎的 `compactNow` 路径）。
 - Peer deps 由 DSH 宿主提供；本插件零运行时 npm 依赖（仅自带 `@deepseek-ai/schemastery`）。
 
 ## Uninstall 卸载
 
 ```sh
-dsh plugin --profile web remove @dsh-external/dsh-auto-compact
+dsh plugin --profile web remove @dsh-external/dsh-smart-compact
 ```
 
 卸载即净：工具、监听器、引擎随插件 fiber 一起销毁；笔记文件保留在 `notesDir`（如需彻底清理请手动删除该目录）。压缩行为恢复为 DSH 默认。

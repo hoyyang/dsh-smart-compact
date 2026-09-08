@@ -1,6 +1,6 @@
 /**
- * dsh-auto-compact configuration: load-time validated, fail-loud.
- * @module dsh-auto-compact/config
+ * dsh-smart-compact configuration: load-time validated, fail-loud.
+ * @module dsh-smart-compact/config
  */
 import z from '@deepseek-ai/schemastery'
 
@@ -40,25 +40,25 @@ export function resolveConfig(config: unknown): ResolvedConfig {
   const maxToolOutputTokens = raw.maxToolOutputTokens ?? 8192
   const notesDir = raw.notesDir
   const retainRatio = raw.retainRatio
-  if (typeof enabled !== 'boolean') throw new Error('dsh-auto-compact: `enabled` must be a boolean')
-  if (typeof auto !== 'boolean') throw new Error('dsh-auto-compact: `auto` must be a boolean')
+  if (typeof enabled !== 'boolean') throw new Error('dsh-smart-compact: `enabled` must be a boolean')
+  if (typeof auto !== 'boolean') throw new Error('dsh-smart-compact: `auto` must be a boolean')
   if (typeof thresholdRatio !== 'number' || !Number.isFinite(thresholdRatio) || thresholdRatio <= 0 || thresholdRatio >= 1) {
-    throw new Error(`dsh-auto-compact: \`thresholdRatio\` must be a number in (0, 1), got ${String(thresholdRatio)}`)
+    throw new Error(`dsh-smart-compact: \`thresholdRatio\` must be a number in (0, 1), got ${String(thresholdRatio)}`)
   }
   if (typeof fallbackBufferTokens !== 'number' || !Number.isInteger(fallbackBufferTokens) || fallbackBufferTokens < 1) {
-    throw new Error(`dsh-auto-compact: \`fallbackBufferTokens\` must be a positive integer, got ${String(fallbackBufferTokens)}`)
+    throw new Error(`dsh-smart-compact: \`fallbackBufferTokens\` must be a positive integer, got ${String(fallbackBufferTokens)}`)
   }
   if (typeof maxToolOutputTokens !== 'number' || !Number.isInteger(maxToolOutputTokens) || maxToolOutputTokens < 256) {
-    throw new Error(`dsh-auto-compact: \`maxToolOutputTokens\` must be an integer >= 256, got ${String(maxToolOutputTokens)}`)
+    throw new Error(`dsh-smart-compact: \`maxToolOutputTokens\` must be an integer >= 256, got ${String(maxToolOutputTokens)}`)
   }
   if (notesDir !== undefined && (typeof notesDir !== 'string' || notesDir.length === 0)) {
-    throw new Error('dsh-auto-compact: `notesDir` must be a non-empty string when provided')
+    throw new Error('dsh-smart-compact: `notesDir` must be a non-empty string when provided')
   }
   if (retainRatio !== undefined && (typeof retainRatio !== 'number' || !Number.isFinite(retainRatio) || retainRatio <= 0 || retainRatio >= 1)) {
-    throw new Error(`dsh-auto-compact: \`retainRatio\` must be a number in (0, 1), got ${String(retainRatio)}`)
+    throw new Error(`dsh-smart-compact: \`retainRatio\` must be a number in (0, 1), got ${String(retainRatio)}`)
   }
   if (retainRatio !== undefined && typeof thresholdRatio === 'number' && retainRatio >= thresholdRatio) {
-    throw new Error(`dsh-auto-compact: \`retainRatio\` (${retainRatio}) must be less than \`thresholdRatio\` (${thresholdRatio})`)
+    throw new Error(`dsh-smart-compact: \`retainRatio\` (${retainRatio}) must be less than \`thresholdRatio\` (${thresholdRatio})`)
   }
   return { enabled, auto, thresholdRatio, fallbackBufferTokens, maxToolOutputTokens, notesDir, retainRatio } as ResolvedConfig
 }
