@@ -26,6 +26,12 @@ Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 
 | `ctx_history` | 回查被 rollover 归档的原始事件（list 窗口 / read 按 seq / search 关键词） |
 | `new_context` | 模型主动请求开新窗口（本步采样完成后、下一步前生效，不打断当前步） |
 
+## Human command 人工命令
+
+| Command 命令 | What it does 作用 |
+|---|---|
+| `/smart-compact` | **100% 触发无缝换窗**：立即开一张新窗口，旧窗口内容无损归档（零模型调用），任务连续性由 ctx_notes + ctx_history 保证。槽位被其它压缩引擎占用时该命令会明确报错（fail loud），绝不静默降级为摘要压缩。 |
+
 ## How rollover works 换窗原理（说人话）
 
 上下文快满（默认窗口的 85%）时不再"把旧对话压成摘要"，而是：先把旧窗口整体**原封不动存档**（本来就有的会话持久化流，零新存储）→ 留 8192 token 缓冲让模型写交接笔记 → 然后开一张干净的新窗口，窗口里只放一段固定模板（"旧窗口已完整存档，当前状态在 ctx_notes，细节用 ctx_history 查"）。全程**不调用一次摘要模型**；旧内容无损、随时可精确回读。
