@@ -64,9 +64,16 @@ export function apply(ctx: Context, config: unknown): void {
   let engineMounted = true
   let slotHolder = 'unknown'
   let engine: RolloverCompactionEngine | null = null
+  // The optional `toolResultPruner` service is a third-party implementation that
+  // may lag the running dsh (observed: a stale 0.1.0-rc.8 copy vendored by
+  // another plugin still read the removed `session.events`, which aborted every
+  // rollover inside base compaction). Rollover archives the whole window and
+  // derives retention from the range selection, so pruning tool outputs first
+  // buys nothing here — isolate the service so the engine never consults it.
+  const engineCtx = ctx.isolate('toolResultPruner')
   try {
     engine = new RolloverCompactionEngine(
-      ctx as never,
+      engineCtx as never,
       { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto, ...(cfg.retainRatio === undefined ? {} : { retainRatio: cfg.retainRatio }) },
       {
         thresholdRatio: cfg.thresholdRatio,
@@ -74,6 +81,7 @@ export function apply(ctx: Context, config: unknown): void {
         auto: cfg.auto,
         logger: ctx.logger,
         onRollover: (info) => writeState({ rolloverCount: (runtimeState.rolloverCount as number) + 1, lastRolloverAt: new Date().toISOString(), lastRolloverTrigger: info.trigger }),
+        onRolloverRefused: (info) => writeState({ lastRolloverRefusedAt: new Date().toISOString(), lastRolloverRefusedReason: info.reason }),
         onBudgetDegraded: (failures) => writeState({ budgetDegraded: true, budgetConsecutiveFailures: failures }),
       },
       pending,
@@ -125,6 +133,8 @@ export function apply(ctx: Context, config: unknown): void {
     rolloverCount: 0,
     lastRolloverAt: null,
     lastRolloverTrigger: null,
+    lastRolloverRefusedAt: null,
+    lastRolloverRefusedReason: null,
     budgetDegraded: false,
     budgetConsecutiveFailures: 0,
     armedAt: new Date().toISOString(),

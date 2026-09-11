@@ -52,6 +52,7 @@ function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbac
     fallbackBufferTokens: overrides?.fallbackBufferTokens ?? 1000,
     auto: overrides?.auto ?? true,
     logger: ctx.logger,
+    onRolloverRefused: vi.fn(),
   }
   const engine = new RolloverCompactionEngine(ctx as never, { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto }, cfg, pending)
   return { engine, pending, cfg }
@@ -142,6 +143,38 @@ describe('RolloverCompactionEngine.compactIfNeeded — three-band policy', () =>
     // second step: no pending request, quiet band, no delegation
     await engine.compactIfNeeded(agent as never, 'pressure', undefined)
     expect(superSpy).toHaveBeenCalledTimes(2)
+    superSpy.mockRestore()
+  })
+
+  it('keeps a forced request pending when the engine refuses, and reports it (never silently swallowed)', async () => {
+    const ctx = makeFakeCtx(10_000)
+    const { engine, pending, cfg } = makeEngine(ctx)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue(null) // both the pressure band and the overflow fallback find nothing compactable
+    const agent = makeAgent()
+    requestRollover(pending, agent as never)
+    await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
+    expect(superSpy).toHaveBeenCalledTimes(2)
+    expect(consumeRollover(pending, agent.session)).toBe(true) // request survived the refusal
+    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('nothing compactable') })
+    // next step: a pending request forces again instead of being lost (re-armed
+    // here because the probe above consumed the entry it observed)
+    requestRollover(pending, agent as never)
+    await engine.compactIfNeeded(agent as never, 'pressure', undefined)
+    expect(superSpy).toHaveBeenCalledTimes(4)
+    superSpy.mockRestore()
+  })
+
+  it('survives an engine error without breaking the step and reports it', async () => {
+    const ctx = makeFakeCtx(10_000)
+    const { engine, pending, cfg } = makeEngine(ctx)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockRejectedValue(new Error('token-meter surface does not match the current session surface'))
+    const agent = makeAgent()
+    requestRollover(pending, agent as never)
+    await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
+    expect(consumeRollover(pending, agent.session)).toBe(true) // still pending for a later step
+    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('error: ') })
     superSpy.mockRestore()
   })
 

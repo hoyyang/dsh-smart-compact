@@ -43,6 +43,8 @@ function makeCtx(totalTokens = 0) {
       listeners.set(event, bucket)
     }),
     reflect: { provide: () => {} },
+    // Model cordis: isolate() returns a scoped child context.
+    isolate: vi.fn(() => ctx),
     get: vi.fn(() => undefined),
     tokenMeter: { measure: () => ({ totalTokens, surfaceTokens: 0, baseline: { kind: 'estimated' } }) },
     llm: {

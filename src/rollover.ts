@@ -18,6 +18,8 @@ import { measureBudget, type AgentLike, type CtxLike } from './budget.js'
 import { sessionEvents, type SessionLogLike } from './history.js'
 import { consumeRollover, type PendingRollover } from './new-context.js'
 
+type CompactionResult = NonNullable<Awaited<ReturnType<BasicCompactionEngine['compactIfNeeded']>>>
+
 export interface RolloverEngineConfig {
   thresholdRatio: number
   fallbackBufferTokens: number
@@ -25,6 +27,8 @@ export interface RolloverEngineConfig {
   logger: { info(msg: string): void; warn(msg: string): void; debug(msg: string): void }
   /** Called after each successful rollover (ops observability). */
   onRollover?: (info: { generation: number; trigger: string }) => void
+  /** Called when a forced rollover cannot run (ops observability for the "never silently swallowed" contract). */
+  onRolloverRefused?: (info: { reason: string }) => void
   /** Called when budget measurement fails repeatedly (degraded visibility). */
   onBudgetDegraded?: (consecutiveFailures: number) => void
 }
@@ -85,6 +89,12 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     }
   }
 
+  private noticeRefusal(reason: string): void {
+    try {
+      this.rolloverCfg.onRolloverRefused?.({ reason })
+    } catch { /* observability must never break the loop */ }
+  }
+
   private noteRollover(agent: { session: SessionLogLike }, trigger: string): void {
     try {
       this.rolloverCfg.onRollover?.({ generation: this.generationOf(agent), trigger })
@@ -125,19 +135,39 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
    * bands straight to basic, matching "overflow forces one useful reduction".
    */
   override async compactIfNeeded(agent: AgentLike, trigger: string, signal?: AbortSignal) {
-    const forced = consumeRollover(this.pending, agent.session)
-    if (forced) {
-      this.rolloverCfg.logger.info('dsh-smart-compact: new_context request consumed — forcing rollover before the next step')
-      // A pending request is an explicit instruction. The regular pressure
-      // bands can legitimately refuse (e.g. the tool-result pruner already
-      // pulled usage below the threshold — observed end-to-end) — when that
-      // happens, fall back to the overflow path which bypasses thresholds
-      // (retain = 0) so an explicit request is never silently swallowed.
-      let result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
-      if (result === null) {
-        result = await super.compactIfNeeded(agent as never, 'context-overflow' as never, signal as never)
+    if (this.pending.has(agent.session)) {
+      // A pending request is an explicit instruction, and it is consumed only
+      // when a rollover actually commits — otherwise it survives to the next
+      // step ("never silently swallowed"). The regular pressure bands can
+      // legitimately refuse (e.g. the tool-result pruner already pulled usage
+      // below the threshold — observed end-to-end); the overflow path bypasses
+      // thresholds (retain = 0) so a forced request really does force. Engine
+      // errors must never break the step loop and are surfaced through the
+      // ops probe instead (rolloverCount vs lastRolloverRefusedReason).
+      let result: CompactionResult | null = null
+      try {
+        result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
+        if (result === null) {
+          result = await super.compactIfNeeded(agent as never, 'context-overflow' as never, signal as never)
+        }
+      } catch (error) {
+        const frames = ((error as Error).stack ?? '').split('\n').slice(1)
+          .map((line) => line.trim().replace(/^at\s+/, ''))
+          .filter((line) => line.includes('/') && !line.includes('dsh-smart-compact/lib/rollover.js'))
+          .slice(0, 2)
+        const reason = `error: ${(error as Error).message}${frames.length > 0 ? ` @ ${frames.join(' <- ')}` : ''}`
+        this.rolloverCfg.logger.warn(`dsh-smart-compact: forced rollover failed — ${reason}`)
+        this.noticeRefusal(reason)
+        return null
       }
-      if (result !== null) this.noteRollover(agent, 'new_context')
+      if (result === null) {
+        const reason = 'engine found nothing compactable (selectCompactableRange returned null on both pressure and overflow)'
+        this.rolloverCfg.logger.warn(`dsh-smart-compact: forced rollover refused — ${reason}; the new_context request stays pending`)
+        this.noticeRefusal(reason)
+        return null
+      }
+      consumeRollover(this.pending, agent.session)
+      this.noteRollover(agent, 'new_context')
       return result
     }
     if (trigger === 'pressure') {
