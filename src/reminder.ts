@@ -98,7 +98,15 @@ export function attachReminder(
       }
       tiersDone.set(session, done)
       if (budget.remaining <= deps.fallbackBufferTokens) {
-        const generation = deps.getWindowGeneration(session)
+        // Isolate the generation probe: a host that cannot count windows must
+        // not take the briefing and the tier nudges down with it (they share
+        // this try block). Degraded = the grace nudge fires once, with a warn.
+        let generation = 0
+        try {
+          generation = deps.getWindowGeneration(session)
+        } catch (error) {
+          deps.logger.warn(`[${deps.pluginName}] window-generation probe failed: ${(error as Error).message}; grace nudge will not repeat this session`)
+        }
         if (graceDone.get(session) !== generation) {
           graceDone.set(session, generation)
           pieces.push(graceNudge(budget.remaining))

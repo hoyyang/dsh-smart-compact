@@ -38,7 +38,7 @@ Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 
 
 窗口编号口径：handoff 头里的 `Context window #N` 就是**会话内窗口序号**（第一张窗口 = #1），与 `ctx_history list` 打印的 `window #N` 同一套序号；list 额外给出 `live window: #N` 指明当前窗口。
 
-Window numbering is the session-window index: the handoff header's `Context window #N` and `ctx_history`'s `window #N` are the same numbering, and `ctx_history list` also prints the live window number.
+Window numbering is the session-window index: the handoff header's `Context window #N` and `ctx_history`'s `window #N` are the same numbering, and `ctx_history list` also prints the live window number. The count is the session log's `compaction/summary` events, so summaries written by another engine (or inherited from a fork parent) are counted too — the header and the list always agree because they read the same set.
 
 When the context approaches its limit (85% by default), the engine does not write an LLM summary. Instead it archives the old window intact (the session's existing durable event stream — no new storage), grants a 8192-token grace band for the model to write handoff notes, then opens a fresh window whose anchor is a fixed template pointing at `ctx_notes` and `ctx_history`. Zero summarization calls; nothing is lost.
 
@@ -73,9 +73,10 @@ Uninstall removes every tool, listener, and engine with the plugin fiber; notes 
 
 ## Verification status 验证声明
 
-- Vitest 38 项单元测试：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒。
+- Vitest 48 项单元测试：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及本轮新增的宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离（测试不再覆盖真实 `engine-state.json`）。
 - **端到端实证（staging 隔离，真实模型 glm-5.3-flash）**：模型依次调用 `get_context_remaining` → `ctx_notes`（写交接笔记）→ `new_context` → `ctx_history` 全链路成功；`new_context` 触发真实 rollover（`rolloverCount: 1`），`ctx_history` 回读到已归档窗口（window #1, ~5965 tokens archived）。
 - 隔离 staging 环境通过 `dsh --dump-config` 组合预检 + 真 boot 后才允许转正；运行模式用 `engine-state.json` 探针可查。
+- 0.3.0 的适配依据：宿主 0.1.5-rc.1 的 `Session` 已移除 `events`，插件改经 `snapshotEvents()` 读取；自带的 0.1.5-rc.2 与宿主 rc.1 的运行时 `lib/` 经 `diff -rq` 校验逐字节相同。
 
 ## License
 

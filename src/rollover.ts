@@ -44,7 +44,7 @@ export function windowGeneration(events: ReadonlyArray<{ type: string }> | undef
 }
 
 /** Session-window number of the window opened by the next rollover: windows start at #1, so it is generation + 2. */
-export function openedWindowNumber(generation: number): number {
+function openedWindowNumber(generation: number): number {
   return generation + 2
 }
 
@@ -57,6 +57,7 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
   private readonly rolloverCfg: RolloverEngineConfig
   private readonly ownCtx: CtxLike
   private remindedGeneration = new WeakMap<object, number>()
+  private warnedGenerationUnavailable = false
   private budgetFailures = new WeakMap<object, number>()
 
   constructor(ctx: CtxLike, config: BasicEngineConfigInput, rolloverCfg: RolloverEngineConfig, pending: PendingRollover) {
@@ -76,7 +77,10 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     try {
       return windowGeneration(sessionEvents(agent.session))
     } catch (error) {
-      this.rolloverCfg.logger.warn(`dsh-smart-compact: window generation unavailable (${(error as Error).message})`)
+      if (!this.warnedGenerationUnavailable) {
+        this.warnedGenerationUnavailable = true
+        this.rolloverCfg.logger.warn(`dsh-smart-compact: window generation unavailable (${(error as Error).message}); grace-band dedup degrades to once per session`)
+      }
       return 0
     }
   }
