@@ -15,7 +15,16 @@ if [ -z "$CHECKOUT" ]; then
   done
 fi
 if [ -z "$CHECKOUT" ] || [ ! -d "$CHECKOUT/packages" ]; then
-  echo "build: cannot locate the dsh checkout (set DSH_CHECKOUT)" >&2
+  # No dsh source checkout on this machine: node_modules already holds the peer
+  # packages with their declarations (npm-installed), so a local tsc compiles
+  # the same sources without the checkout-only linking step.
+  if [ -x "node_modules/.bin/tsc" ]; then
+    echo "=== No dsh checkout found — compiling with the local tsc ==="
+    node_modules/.bin/tsc -p tsconfig.json
+    echo "=== Build complete (local tsc) ==="
+    exit 0
+  fi
+  echo "build: cannot locate the dsh checkout (set DSH_CHECKOUT) and no local node_modules/.bin/tsc" >&2
   exit 1
 fi
 

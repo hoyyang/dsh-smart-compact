@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SessionArchiveReader, eventText, type SessionEventLike } from '../src/history.ts'
+import { SessionArchiveReader, eventText, sessionEvents, type SessionEventLike } from '../src/history.ts'
 
 function eventsWithOneRollover(): SessionEventLike[] {
   return [
@@ -11,6 +11,17 @@ function eventsWithOneRollover(): SessionEventLike[] {
     { seq: 5, type: 'user/message', data: { message: { content: [{ type: 'text', text: 'continue' }] } } },
   ]
 }
+
+describe('sessionEvents — host Session API adapter', () => {
+  it('reads the durable log through snapshotEvents()', () => {
+    const events = eventsWithOneRollover()
+    expect(sessionEvents({ seq: events.length, snapshotEvents: () => events })).toHaveLength(6)
+  })
+
+  it('fails loud (naming the missing capability) instead of returning an empty log', () => {
+    expect(() => sessionEvents({ id: 'legacy' } as never)).toThrow(/does not expose snapshotEvents\(\)/)
+  })
+})
 
 describe('SessionArchiveReader.listWindows', () => {
   it('derives one archived window per compaction/summary event', () => {

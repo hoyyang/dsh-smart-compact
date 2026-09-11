@@ -10,7 +10,31 @@ import { truncateToTokens } from './config.js'
 export interface SessionEventLike {
   seq: number
   type: string
-  data?: Record<string, unknown>
+  /** Untyped payload: the host's event-data unions have no index signature. */
+  data?: unknown
+}
+
+/**
+ * Structural view of the host Session's durable-log API (dsh >= 0.1.5-rc).
+ * The host removed `Session.events`; reading it now yields nothing, which
+ * silently disabled recall. This adapter therefore fails loud by name instead
+ * of degrading to an empty log.
+ */
+export interface SessionLogLike {
+  /** Log length as the host reports it (`Session.seq`). */
+  readonly seq?: number
+  /** Full durable log in log order (`Session.snapshotEvents()`). */
+  snapshotEvents?(fromSeq?: number, toSeqExclusive?: number): readonly SessionEventLike[]
+}
+
+/** Snapshot a session's durable event log, or fail loud naming the missing capability. */
+export function sessionEvents(session: SessionLogLike): readonly SessionEventLike[] {
+  if (typeof session?.snapshotEvents !== 'function') {
+    throw new Error(
+      'dsh-smart-compact: this host session does not expose snapshotEvents() — dsh >= 0.1.5-rc is required (Session.events was removed); update dsh or reinstall the plugin',
+    )
+  }
+  return session.snapshotEvents()
 }
 
 export interface ArchivedWindow {

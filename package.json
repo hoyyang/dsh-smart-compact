@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-smart-compact",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Codex-style context window auto-management for DSH: budget visibility, rollover compaction engine, notes handoff, history recall",
   "private": true,
   "type": "module",
@@ -20,13 +20,13 @@
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-compaction": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-compaction-basic": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-home-paths": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
-    "@deepseek-ai/dsh-token-meter": ">=0.0.1-rc <2",
-    "cordis": ">=4.0.0-rc <5"
+    "@deepseek-ai/cordis": ">=4.0.1 <5",
+    "@deepseek-ai/dsh-compaction": ">=0.1.5-rc <2",
+    "@deepseek-ai/dsh-compaction-basic": ">=0.1.5-rc <2",
+    "@deepseek-ai/dsh-home-paths": ">=0.1.5-rc <2",
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc <2",
+    "@deepseek-ai/dsh-token-meter": ">=0.1.5-rc <2",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc <2"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

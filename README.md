@@ -36,6 +36,10 @@ Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 
 
 上下文快满（默认窗口的 85%）时不再"把旧对话压成摘要"，而是：先把旧窗口整体**原封不动存档**（本来就有的会话持久化流，零新存储）→ 留 8192 token 缓冲让模型写交接笔记 → 然后开一张干净的新窗口，窗口里只放一段固定模板（"旧窗口已完整存档，当前状态在 ctx_notes，细节用 ctx_history 查"）。全程**不调用一次摘要模型**；旧内容无损、随时可精确回读。
 
+窗口编号口径：handoff 头里的 `Context window #N` 就是**会话内窗口序号**（第一张窗口 = #1），与 `ctx_history list` 打印的 `window #N` 同一套序号；list 额外给出 `live window: #N` 指明当前窗口。
+
+Window numbering is the session-window index: the handoff header's `Context window #N` and `ctx_history`'s `window #N` are the same numbering, and `ctx_history list` also prints the live window number.
+
 When the context approaches its limit (85% by default), the engine does not write an LLM summary. Instead it archives the old window intact (the session's existing durable event stream — no new storage), grants a 8192-token grace band for the model to write handoff notes, then opens a fresh window whose anchor is a fixed template pointing at `ctx_notes` and `ctx_history`. Zero summarization calls; nothing is lost.
 
 ## Configuration 配置（config.toml → 插件配置）
@@ -53,8 +57,9 @@ When the context approaches its limit (85% by default), the engine does not writ
 ## Compatibility 兼容性
 
 - **单槽优先原则**：`compaction` 服务是单槽——本插件安装后默认**接管**该槽（rollover 换窗语义），要求在 profile bundles 里位于其它压缩引擎（dsh-glm / dsh-kiro / compaction-basic）**之前**。被让位的引擎（如 dsh-glm）凭其内置谦让检查自动跳过挂载，其余功能不受影响。可用状态探针确认当前模式：`cat <dsh home>/dsh-smart-compact/engine-state.json`（`engineMounted: true` = rollover 已接管；`false` = 槽被其它引擎占用，本插件仅提供工具与提醒）。
-- `/compact` 手动命令在本引擎在场时自动获得换窗语义（继承自官方引擎的 `compactNow` 路径）。
-- Peer deps 由 DSH 宿主提供；本插件零运行时 npm 依赖（仅自带 `@deepseek-ai/schemastery`）。
+- 命令入口只有 `/smart-compact`：profile 里官方 `command-compact`（`/compact`）保持 `disabled`——避免出现"槽位被别的引擎占用时 `/compact` 静默退化为摘要压缩"这条与无损承诺冲突的路径。
+- **版本要求 dsh >= 0.1.5-rc**：会话日志经 `Session.snapshotEvents()` 读取（0.1.5 之前版本的 `Session.events` 已被上游移除）；宿主不提供该 API 时本插件点名报错，绝不静默失忆。
+- Peer deps 声明随 dsh 主版本走（当前 `>=0.1.5-rc <2`）。插件自带的 `node_modules` 副本是**运行时真实解析目标**（插件的 realpath 不在宿主 `node_modules` 的解析链上），因此**升级 dsh 后必须重跑 `npm install` 并重建 `lib/`**，否则会继续加载旧核心 API。
 
 ## Uninstall 卸载
 

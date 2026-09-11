@@ -39,7 +39,8 @@ function makeFakeCtx(totalTokens: number): FakeCtx {
 
 function makeAgent(events: Array<{ seq: number; type: string }> = []) {
   return {
-    session: { id: 'sess-1', events },
+    // Host Session shape (dsh >= 0.1.5-rc): a durable-log snapshot, no `events`.
+    session: { id: 'sess-1', seq: events.length, snapshotEvents: () => events },
     options: { provider: 'test-provider', model: 'test-model' },
   }
 }
@@ -65,6 +66,15 @@ describe('windowGeneration', () => {
 })
 
 describe('RolloverCompactionEngine.summarize — the zero-model-call handoff', () => {
+  it('numbers the opened window by session-window index (first window is #1)', async () => {
+    const ctx = makeFakeCtx(0)
+    const { engine } = makeEngine(ctx)
+    const first = makeAgent([])
+    expect((await engine.summarize({}, first as never, undefined)).summary[0].text).toContain('Context window #2 opened')
+    const second = makeAgent([{ seq: 1, type: 'compaction/summary' }])
+    expect((await engine.summarize({}, second as never, undefined)).summary[0].text).toContain('Context window #3 opened')
+  })
+
   it('returns a fixed template, never an LLM call shape', async () => {
     const ctx = makeFakeCtx(0)
     const { engine } = makeEngine(ctx)
