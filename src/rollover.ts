@@ -15,6 +15,7 @@
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { measureBudget, type AgentLike, type CtxLike } from './budget.js'
+import { sessionEvents, type SessionLogLike } from './history.js'
 import { consumeRollover, type PendingRollover } from './new-context.js'
 
 export interface RolloverEngineConfig {
@@ -36,10 +37,15 @@ interface BasicEngineConfigInput {
   [key: string]: unknown
 }
 
-/** Number of completed rollovers = window generation for this session. */
+/** Number of completed rollovers recorded in a session log (window generation). */
 export function windowGeneration(events: ReadonlyArray<{ type: string }> | undefined): number {
   if (!events) return 0
   return events.filter((e) => e.type === 'compaction/summary').length
+}
+
+/** Session-window number of the window opened by the next rollover: windows start at #1, so it is generation + 2. */
+export function openedWindowNumber(generation: number): number {
+  return generation + 2
 }
 
 const ROLLOVER_TEMPLATE_MARKER = '[smart-compact rollover]'
@@ -60,10 +66,24 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     this.pending = pending
   }
 
-  private noteRollover(agent: { session: { events?: ReadonlyArray<{ type: string }> } }, trigger: string): void {
-    const generation = windowGeneration(agent.session.events)
+  /**
+   * Log-generation for dedup/observability only: it may never break the
+   * compaction path, so an unreadable log degrades to 0 with a warning here.
+   * The user-facing paths (tools, summarize) call sessionEvents() directly and
+   * fail loud instead.
+   */
+  private generationOf(agent: { session: SessionLogLike }): number {
     try {
-      this.rolloverCfg.onRollover?.({ generation, trigger })
+      return windowGeneration(sessionEvents(agent.session))
+    } catch (error) {
+      this.rolloverCfg.logger.warn(`dsh-smart-compact: window generation unavailable (${(error as Error).message})`)
+      return 0
+    }
+  }
+
+  private noteRollover(agent: { session: SessionLogLike }, trigger: string): void {
+    try {
+      this.rolloverCfg.onRollover?.({ generation: this.generationOf(agent), trigger })
     } catch { /* observability must never break the compaction path */ }
   }
 
@@ -73,10 +93,14 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
    * the framed checkpoint must price smaller than the shadowed content
    * (enforced loudly by the compaction transaction itself).
    */
-  override async summarize(_input: unknown, agent: { session: { events?: ReadonlyArray<{ type: string }> } }, _signal?: AbortSignal) {
-    const generation = windowGeneration(agent.session.events)
+  override async summarize(_input: unknown, agent: { session: SessionLogLike }, _signal?: AbortSignal) {
+    // Numbering is the session-window index (ctx_history prints the same index
+    // for the window it archived), not the rollover ordinal: summarize() runs
+    // before this rollover's summary event is committed, so the window it opens
+    // is generation + 2.
+    const generation = windowGeneration(sessionEvents(agent.session))
     const text = [
-      `${ROLLOVER_TEMPLATE_MARKER} Context window #${generation + 1} opened.`,
+      `${ROLLOVER_TEMPLATE_MARKER} Context window #${openedWindowNumber(generation)} opened.`,
       'The previous window was archived in full — no content was summarized or lost.',
       'Handoff: current goal, decisions, and next steps live in ctx_notes (read it first).',
       'Missing details: ctx_history search/read recalls exact original events on demand.',
@@ -140,7 +164,7 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
         return result
       }
       // Grace band: remind once per window generation, keep working.
-      const generation = windowGeneration(agent.session.events)
+      const generation = this.generationOf(agent)
       if (this.remindedGeneration.get(agent.session) !== generation) {
         this.remindedGeneration.set(agent.session, generation)
         this.rolloverCfg.logger.info(

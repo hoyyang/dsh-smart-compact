@@ -1,13 +1,15 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp } from 'node:fs/promises'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { measureBudget, resolveModelTarget, wrapUpAdvice, type CtxLike } from '../src/budget.ts'
 import { apply } from '../src/index.ts'
 
 function makeAgent(events: Array<{ seq: number; type: string }> = [], totalTokens = 0) {
+  void totalTokens
   return {
-    session: { id: 'sess-9', events },
+    // Host Session shape (dsh >= 0.1.5-rc): a durable-log snapshot, no `events`.
+    session: { id: 'sess-9', seq: events.length, snapshotEvents: () => events },
     options: { provider: 'p', model: 'm' },
   }
 }
@@ -81,6 +83,28 @@ describe('apply() lifecycle', () => {
   async function notesDir() {
     return mkdtemp(join(tmpdir(), 'dsh-smart-compact-apply-'))
   }
+
+  // The ops probe is written to <DSH_HOME>/dsh-smart-compact/engine-state.json.
+  // Tests must never touch the developer's real home (running the suite used to
+  // overwrite the live probe with synthetic mount data).
+  let home = ''
+  let previousHome: string | undefined
+  beforeEach(async () => {
+    previousHome = process.env.DSH_HOME
+    home = await mkdtemp(join(tmpdir(), 'dsh-smart-compact-home-'))
+    process.env.DSH_HOME = home
+  })
+  afterEach(() => {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+  })
+
+  it('writes its ops probe under DSH_HOME, not the real user home', async () => {
+    const { ctx } = makeCtx()
+    apply(ctx, { notesDir: await notesDir() })
+    const probe = JSON.parse(await readFile(join(home, 'dsh-smart-compact', 'engine-state.json'), 'utf8'))
+    expect(probe).toMatchObject({ plugin: 'dsh-smart-compact', engineMounted: true })
+  })
 
   it('registers exactly four tools with auto=true and arms the engine', async () => {
     const { ctx, registered, listeners } = makeCtx()

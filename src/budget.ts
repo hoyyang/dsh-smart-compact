@@ -3,12 +3,11 @@
  * @module dsh-smart-compact/budget
  */
 
+import type { SessionLogLike } from './history.js'
+
 /** Structural view of the pieces of Agent we consume (no hard peer import). */
 export interface AgentLike {
-  session: {
-    id: string
-    events?: ReadonlyArray<{ seq: number; type: string }>
-  }
+  session: SessionLogLike & { id: string }
   options?: { provider?: string; model?: string }
 }
 

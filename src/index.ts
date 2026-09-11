@@ -11,8 +11,8 @@
  *    with a zero-model-call handoff template, plus the wrap-up reminder.
  * @module @dsh-external/dsh-smart-compact
  */
-import { cpSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
@@ -22,11 +22,11 @@ import type {} from '@deepseek-ai/dsh-token-meter'
 import type {} from '@deepseek-ai/dsh-llm'
 import { resolveConfig, estimateTokens } from './config.js'
 import { NotesStore, type NotesArgs } from './notes.js'
-import { SessionArchiveReader, type HistoryArgs } from './history.js'
+import { SessionArchiveReader, sessionEvents, type HistoryArgs, type SessionLogLike } from './history.js'
 import { measureBudget, resolveModelTarget, wrapUpAdvice, type AgentLike } from './budget.js'
 import { requestRollover, consumeRollover, type PendingRollover } from './new-context.js'
 import { attachReminder } from './reminder.js'
-import { RolloverCompactionEngine } from './rollover.js'
+import { RolloverCompactionEngine, windowGeneration } from './rollover.js'
 import { registerSmartCompactCommand } from './command.js'
 
 export const name = '@dsh-external/dsh-smart-compact'
@@ -132,6 +132,9 @@ export function apply(ctx: Context, config: unknown): void {
   const writeState = (patch: Record<string, unknown>): void => {
     try {
       Object.assign(runtimeState, patch)
+      // A fresh DSH_HOME has no plugin directory yet; without it the probe write
+      // failed with ENOENT and the ops surface silently never appeared.
+      mkdirSync(dirname(stateFile), { recursive: true })
       writeFileSync(stateFile, `${JSON.stringify(runtimeState, null, 2)}\n`, 'utf8')
     } catch (error) {
       ctx.logger.warn(`${PLUGIN}: could not write engine-state.json: ${(error as Error).message}`)
@@ -148,10 +151,7 @@ export function apply(ctx: Context, config: unknown): void {
     attachReminder(ctx as never, {
       fallbackBufferTokens: cfg.fallbackBufferTokens,
       getBudget,
-      getWindowGeneration: (session) => {
-        const events = (session as AgentLike).session?.events
-        return events ? events.filter((e) => e.type === 'compaction/summary').length : 0
-      },
+      getWindowGeneration: (session) => windowGeneration(sessionEvents(session as SessionLogLike)),
       logger: ctx.logger,
       pluginName: PLUGIN,
     })
@@ -242,13 +242,15 @@ export function apply(ctx: Context, config: unknown): void {
     },
     async execute(args: HistoryArgs, exec: { agent?: unknown }) {
       const agent = requireAgent(exec, 'ctx_history')
-      const events = (agent.session.events ?? []) as unknown as ConstructorParameters<typeof SessionArchiveReader>[0]
-      const reader = new SessionArchiveReader(events, cfg.maxToolOutputTokens)
+      const reader = new SessionArchiveReader(sessionEvents(agent.session), cfg.maxToolOutputTokens)
       switch (args.action) {
         case 'list': {
           const windows = reader.listWindows()
           if (windows.length === 0) return '(no rollover has happened yet — the whole conversation is still in the live window)'
-          return windows.map((w) => `window #${w.index}: seqs ${w.startSeq}–${w.endSeq} (${w.shadowedSeqs.length} events, ~${w.shadowedTokenCount} tokens archived)`).join('\n')
+          return [
+            ...windows.map((w) => `window #${w.index}: seqs ${w.startSeq}–${w.endSeq} (${w.shadowedSeqs.length} events, ~${w.shadowedTokenCount} tokens archived)`),
+            `live window: #${windows.length + 1} (the rollover handoff header names this window)`,
+          ].join('\n')
         }
         case 'read': {
           if (!Array.isArray(args.seqs) || args.seqs.length === 0) throw new Error(`${PLUGIN}: ctx_history read requires non-empty \`seqs\` (run action=list first)`)
