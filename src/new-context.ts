@@ -11,7 +11,7 @@ export type PendingRollover = WeakSet<object>
 
 export function requestRollover(pending: PendingRollover, agent: AgentLike): string {
   pending.add(agent.session)
-  return 'Rollover requested. Finish the current step; before the next step a fresh context window will be opened (archived content stays recallable via ctx_history). If you have not written ctx_notes yet, do it in this step.'
+  return 'Rollover requested. Finish the current step; before the next step a fresh context window is opened (the request stays armed and retries until a switch commits; archived content stays recallable via ctx_history). If you have not written ctx_notes yet, do it in this step.'
 }
 
 /** Consume a pending request; true exactly once per request. */

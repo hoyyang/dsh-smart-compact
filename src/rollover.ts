@@ -56,6 +56,37 @@ const ROLLOVER_TEMPLATE_MARKER = '[smart-compact rollover]'
 /** Consecutive budget-measurement failures before the degraded signal fires. */
 const BUDGET_DEGRADED_AFTER = 5
 
+/**
+ * Human text for a thrown value of ANY shape. A rejection may be a string,
+ * null or a plain object (third-party adapters do this), and reading .message
+ * off it would throw from inside the catch handler — breaking the very step
+ * loop this code exists to protect.
+ */
+function messageOf(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error)
+  } catch {
+    return '<unprintable rejection>'
+  }
+}
+
+/**
+ * One-line incident description with the first non-plugin stack frames. Both
+ * path separators are accepted so a Windows-hosted runner still reports frames.
+ */
+function describeError(error: unknown): string {
+  let frames: string[] = []
+  try {
+    const stack = error instanceof Error ? error.stack ?? '' : ''
+    frames = stack.split('\n').slice(1)
+      .map((line) => line.trim().replace(/^at\s+/, ''))
+      .filter((line) => /[\\/]/.test(line) && !line.includes('dsh-smart-compact/lib/rollover.js'))
+      .slice(0, 2)
+  } catch { /* reading a stack must never throw either */ }
+  const message = messageOf(error)
+  return `error: ${message}${frames.length > 0 ? ` @ ${frames.join(' <- ')}` : ''}`
+}
+
 export class RolloverCompactionEngine extends BasicCompactionEngine {
   private readonly pending: PendingRollover
   private readonly rolloverCfg: RolloverEngineConfig
@@ -83,9 +114,29 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     } catch (error) {
       if (!this.warnedGenerationUnavailable) {
         this.warnedGenerationUnavailable = true
-        this.rolloverCfg.logger.warn(`dsh-smart-compact: window generation unavailable (${(error as Error).message}); grace-band dedup degrades to once per session`)
+        this.rolloverCfg.logger.warn(`dsh-smart-compact: window generation unavailable (${messageOf(error)}); grace-band dedup degrades to once per session`)
       }
       return 0
+    }
+  }
+
+  /**
+   * Budget-measurement failure accounting, shared by the pressure band and the
+   * forced-rollover pre-flight: an unmeasurable budget is a configuration
+   * problem (no contextWindow), NOT a rollover refusal. Counting it here keeps
+   * the degraded signal reachable on every path (review P1-A).
+   */
+  private noteBudgetFailure(agent: { session: object }, error: unknown): void {
+    const failures = (this.budgetFailures.get(agent.session) ?? 0) + 1
+    this.budgetFailures.set(agent.session, failures)
+    const tail = failures >= BUDGET_DEGRADED_AFTER
+      ? ' — BUDGET OBSERVABILITY DEGRADED: rollover thresholds are NOT being evaluated; check the model contextWindow config'
+      : '; retrying next step'
+    this.rolloverCfg.logger.warn(`dsh-smart-compact: budget measurement failed (${failures}x consecutive) (${messageOf(error)})${tail}`)
+    if (failures === BUDGET_DEGRADED_AFTER) {
+      try {
+        this.rolloverCfg.onBudgetDegraded?.(failures)
+      } catch { /* observability must never break the loop */ }
     }
   }
 
@@ -144,6 +195,16 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
       // thresholds (retain = 0) so a forced request really does force. Engine
       // errors must never break the step loop and are surfaced through the
       // ops probe instead (rolloverCount vs lastRolloverRefusedReason).
+      // Advisory pre-flight: the base engine measures budget internally, and a
+      // measurement failure thrown from there used to bypass the degraded
+      // accounting entirely (review P1-A). Counting it here keeps the signal
+      // reachable, but never gates the rollover — the base may still commit.
+      try {
+        await measureBudget(this.ownCtx, agent, signal)
+        this.budgetFailures.delete(agent.session)
+      } catch (error) {
+        if (!signal?.aborted) this.noteBudgetFailure(agent, error)
+      }
       let result: CompactionResult | null = null
       try {
         result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
@@ -151,11 +212,15 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
           result = await super.compactIfNeeded(agent as never, 'context-overflow' as never, signal as never)
         }
       } catch (error) {
-        const frames = ((error as Error).stack ?? '').split('\n').slice(1)
-          .map((line) => line.trim().replace(/^at\s+/, ''))
-          .filter((line) => line.includes('/') && !line.includes('dsh-smart-compact/lib/rollover.js'))
-          .slice(0, 2)
-        const reason = `error: ${(error as Error).message}${frames.length > 0 ? ` @ ${frames.join(' <- ')}` : ''}`
+        if (signal?.aborted) {
+          // The step was cancelled, not refused: the explicit request stays
+          // armed for the next step (dropping it here would be exactly the
+          // silent swallow this branch exists to prevent) and no ops incident
+          // is recorded.
+          this.rolloverCfg.logger.info('dsh-smart-compact: forced rollover was aborted with the step — the new_context request stays pending')
+          return null
+        }
+        const reason = describeError(error)
         this.rolloverCfg.logger.warn(`dsh-smart-compact: forced rollover failed — ${reason}`)
         this.noticeRefusal(reason)
         return null
@@ -176,17 +241,7 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
         budget = await measureBudget(this.ownCtx, agent, signal)
         this.budgetFailures.delete(agent.session)
       } catch (error) {
-        const failures = (this.budgetFailures.get(agent.session) ?? 0) + 1
-        this.budgetFailures.set(agent.session, failures)
-        const tail = failures >= BUDGET_DEGRADED_AFTER
-          ? ' — BUDGET OBSERVABILITY DEGRADED: rollover thresholds are NOT being evaluated; check the model contextWindow config'
-          : '; retrying next step'
-        this.rolloverCfg.logger.warn(`dsh-smart-compact: budget measurement failed (${failures}x consecutive) (${(error as Error).message})${tail}`)
-        if (failures === BUDGET_DEGRADED_AFTER) {
-          try {
-            this.rolloverCfg.onBudgetDegraded?.(failures)
-          } catch { /* observability must never break the loop */ }
-        }
+        this.noteBudgetFailure(agent, error)
         return null
       }
       const thresholdTokens = budget.contextWindow * this.rolloverCfg.thresholdRatio

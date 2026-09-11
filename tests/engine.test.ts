@@ -53,6 +53,7 @@ function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbac
     auto: overrides?.auto ?? true,
     logger: ctx.logger,
     onRolloverRefused: vi.fn(),
+    onBudgetDegraded: vi.fn(),
   }
   const engine = new RolloverCompactionEngine(ctx as never, { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto }, cfg, pending)
   return { engine, pending, cfg }
@@ -155,13 +156,13 @@ describe('RolloverCompactionEngine.compactIfNeeded — three-band policy', () =>
     requestRollover(pending, agent as never)
     await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
     expect(superSpy).toHaveBeenCalledTimes(2)
-    expect(consumeRollover(pending, agent.session)).toBe(true) // request survived the refusal
+    expect(pending.has(agent.session)).toBe(true) // request survived the refusal (non-destructive probe)
     expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('nothing compactable') })
-    // next step: a pending request forces again instead of being lost (re-armed
-    // here because the probe above consumed the entry it observed)
-    requestRollover(pending, agent as never)
+    // next step, SAME still-armed request: it forces again instead of being lost
     await engine.compactIfNeeded(agent as never, 'pressure', undefined)
     expect(superSpy).toHaveBeenCalledTimes(4)
+    expect(cfg.onRolloverRefused).toHaveBeenCalledTimes(2) // every retry is reported, none is swallowed
+    expect(pending.has(agent.session)).toBe(true)
     superSpy.mockRestore()
   })
 
@@ -175,6 +176,61 @@ describe('RolloverCompactionEngine.compactIfNeeded — three-band policy', () =>
     await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
     expect(consumeRollover(pending, agent.session)).toBe(true) // still pending for a later step
     expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('error: ') })
+    superSpy.mockRestore()
+  })
+
+it('treats a non-Error rejection as an incident instead of crashing the step', async () => {
+    const ctx = makeFakeCtx(10_000)
+    const { engine, pending, cfg } = makeEngine(ctx)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockRejectedValue('plain string rejection') // third-party adapters reject with non-Errors
+    const agent = makeAgent()
+    requestRollover(pending, agent as never)
+    await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
+    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('plain string rejection') })
+    expect(pending.has(agent.session)).toBe(true)
+    superSpy.mockRestore()
+  })
+
+  it('keeps the request armed and records no incident when the step was aborted', async () => {
+    const ctx = makeFakeCtx(10_000)
+    const { engine, pending, cfg } = makeEngine(ctx)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockRejectedValue(new Error('aborted'))
+    const agent = makeAgent()
+    const controller = new AbortController()
+    requestRollover(pending, agent as never)
+    controller.abort()
+    await expect(engine.compactIfNeeded(agent as never, 'pressure', controller.signal)).resolves.toBeNull()
+    expect(cfg.onRolloverRefused).not.toHaveBeenCalled() // an abort is not a refusal
+    expect(pending.has(agent.session)).toBe(true)         // and the explicit request is not dropped
+    superSpy.mockRestore()
+  })
+
+  it('commits on the first band without running the overflow fallback', async () => {
+    const ctx = makeFakeCtx(10_000)
+    const { engine, pending, cfg } = makeEngine(ctx)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue({ shadowedSeqs: [0, 1] })
+    const agent = makeAgent()
+    requestRollover(pending, agent as never)
+    await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.not.toBeNull()
+    expect(superSpy).toHaveBeenCalledTimes(1) // no unnecessary second pass
+    expect(pending.has(agent.session)).toBe(false) // committed ⇒ consumed
+    superSpy.mockRestore()
+  })
+
+  it('counts a budget-measurement failure even on the forced path (degraded signal stays reachable)', async () => {
+    const ctx = makeFakeCtx(10_000)
+    ctx.llm.resolveModelInfo = async () => ({ context: {} }) // no contextWindow
+    const { engine, pending, cfg } = makeEngine(ctx)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue({ shadowedSeqs: [0, 1] })
+    const agent = makeAgent()
+    requestRollover(pending, agent as never)
+    for (let i = 0; i < 5; i += 1) await engine.compactIfNeeded(agent as never, 'pressure', undefined)
+    expect(cfg.onBudgetDegraded).toHaveBeenCalledWith(5)
+    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('BUDGET OBSERVABILITY DEGRADED'))
     superSpy.mockRestore()
   })
 

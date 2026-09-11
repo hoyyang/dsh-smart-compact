@@ -59,6 +59,8 @@ When the context approaches its limit (85% by default), the engine does not writ
 - **单槽优先原则**：`compaction` 服务是单槽——本插件安装后默认**接管**该槽（rollover 换窗语义），要求在 profile bundles 里位于其它压缩引擎（dsh-glm / dsh-kiro / compaction-basic）**之前**。被让位的引擎（如 dsh-glm）凭其内置谦让检查自动跳过挂载，其余功能不受影响。可用状态探针确认当前模式：`cat <dsh home>/dsh-smart-compact/engine-state.json`（`engineMounted: true` = rollover 已接管；`false` = 槽被其它引擎占用，本插件仅提供工具与提醒）。
 - 命令入口只有 `/smart-compact`：profile 里官方 `command-compact`（`/compact`）保持 `disabled`——避免出现"槽位被别的引擎占用时 `/compact` 静默退化为摘要压缩"这条与无损承诺冲突的路径。
 - **版本要求 dsh >= 0.1.5-rc**：会话日志经 `Session.snapshotEvents()` 读取（0.1.5 之前版本的 `Session.events` 已被上游移除）；宿主不提供该 API 时本插件点名报错，绝不静默失忆。
+- **与第三方 `toolResultPruner` 的隔离**：该服务是可选的第三方实现，可能滞后于 dsh（实测一份陈旧副本仍在读已被上游移除的 `session.events`，会在基础压缩内部中断**每一次**换窗）。因为 rollover 是整窗机械归档、保留范围由区间选择决定，前置剪枝在这里没有收益——引擎因此运行在 `ctx.isolate('toolResultPruner')` 的子上下文上，永不咨询该服务。代价：手动 `/smart-compact` 路径同样不做前置剪枝（它只在窗口真正需要压缩时才可能收敛得更少）。apply 时会自检隔离是否生效，失效则打点警告。
+- **换窗请求不会被静默吞掉**：`new_context` 请求只在换窗**真正提交**时才被消费；被拒（无可压缩区间）或引擎报错时请求保留在 pending 集合里，逐步骤重试，并把最近一次原因写入探针（`lastRolloverRefusedAt` / `lastRolloverRefusedReason`，相同原因 30s 内合并写入）。步骤被中止（abort）时不算拒绝：请求继续挂起，不记 ops 事件。预算不可测（如模型未配 `contextWindow`）与换窗失败分开记账，连续 5 次触发 `budgetDegraded`。
 - Peer deps 声明随 dsh 主版本走（当前 `>=0.1.5-rc <2`）。插件自带的 `node_modules` 副本是**运行时真实解析目标**（插件的 realpath 不在宿主 `node_modules` 的解析链上），因此**升级 dsh 后必须重跑 `npm install` 并重建 `lib/`**，否则会继续加载旧核心 API。
 
 ## Uninstall 卸载
@@ -73,9 +75,10 @@ Uninstall removes every tool, listener, and engine with the plugin fiber; notes 
 
 ## Verification status 验证声明
 
-- Vitest 48 项单元测试：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及本轮新增的宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离（测试不再覆盖真实 `engine-state.json`）。
+- Vitest 66 项单元测试：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及本轮新增的宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离（`vitest.config.ts` 给整轮测试一个临时 home——此前跑测试会把真实 `engine-state.json` 覆盖成合成数据，已实测复现并修掉）、pruner 隔离接线与自检、非 Error 抛出/中止信号/预算记账等回归用例。
 - **端到端实证（staging 隔离，真实模型 glm-5.3-flash）**：模型依次调用 `get_context_remaining` → `ctx_notes`（写交接笔记）→ `new_context` → `ctx_history` 全链路成功；`new_context` 触发真实 rollover（`rolloverCount: 1`），`ctx_history` 回读到已归档窗口（window #1, ~5965 tokens archived）。
 - 隔离 staging 环境通过 `dsh --dump-config` 组合预检 + 真 boot 后才允许转正；运行模式用 `engine-state.json` 探针可查。
+- **真机换窗实证（本机真实会话）**：`new_context` → 换窗提交（`rolloverCount: 1`、`lastRolloverTrigger: new_context`、`lastRolloverRefusedReason: null`）→ 窗口 #1 全量归档（393 events / ~307k tokens）→ 新窗口 handoff 头为 `Context window #2 opened` → 跨窗 `ctx_history search` 命中 23 条；主 home `boot-check.sh` 冷启动三故障静态检测全绿。
 - 0.3.0 的适配依据：宿主 0.1.5-rc.1 的 `Session` 已移除 `events`，插件改经 `snapshotEvents()` 读取；自带的 0.1.5-rc.2 与宿主 rc.1 的运行时 `lib/` 经 `diff -rq` 校验逐字节相同。
 
 ## License

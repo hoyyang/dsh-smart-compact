@@ -36,6 +36,9 @@ export { Config } from './config.js'
 
 const PLUGIN = 'dsh-smart-compact'
 
+/** Minimum gap between two identical refusal records in the ops probe (hot-path write throttle). */
+const REFUSAL_STATE_COOLDOWN_MS = 30_000
+
 /** Require an agent-backed execution; tools are meaningless without a session. */
 function requireAgent(exec: { agent?: unknown }, toolName: string): AgentLike {
   if (!exec.agent) throw new Error(`${PLUGIN}: ${toolName} was called without an owning agent session`)
@@ -71,6 +74,16 @@ export function apply(ctx: Context, config: unknown): void {
   // derives retention from the range selection, so pruning tool outputs first
   // buys nothing here — isolate the service so the engine never consults it.
   const engineCtx = ctx.isolate('toolResultPruner')
+  // Isolation is a whole-context shadow, so prove it took effect — a no-op
+  // would silently hand the lagging pruner back to the engine. The isolated
+  // view reports undefined WITHOUT instantiating the service (the service map
+  // is keyed by the isolate shadow), so the probe is free in the normal case.
+  // Trade-off (documented in the README): the isolation also hides the pruner
+  // from the manual /smart-compact path, which therefore compacts unpruned.
+  if ((engineCtx as unknown as { get(name: string): unknown }).get('toolResultPruner') !== undefined) {
+    ctx.logger.warn(`${PLUGIN}: ctx.isolate('toolResultPruner') did not take effect — a lagging pruner can abort rollovers`)
+  }
+  let lastRefusal: { reason: string; at: number } = { reason: '', at: 0 }
   try {
     engine = new RolloverCompactionEngine(
       engineCtx as never,
@@ -81,7 +94,14 @@ export function apply(ctx: Context, config: unknown): void {
         auto: cfg.auto,
         logger: ctx.logger,
         onRollover: (info) => writeState({ rolloverCount: (runtimeState.rolloverCount as number) + 1, lastRolloverAt: new Date().toISOString(), lastRolloverTrigger: info.trigger }),
-        onRolloverRefused: (info) => writeState({ lastRolloverRefusedAt: new Date().toISOString(), lastRolloverRefusedReason: info.reason }),
+        onRolloverRefused: (info) => {
+          // A request that cannot commit is retried every step, so identical
+          // refusals are coalesced instead of rewriting the probe on each one.
+          const now = Date.now()
+          if (info.reason === lastRefusal.reason && now - lastRefusal.at < REFUSAL_STATE_COOLDOWN_MS) return
+          lastRefusal = { reason: info.reason, at: now }
+          writeState({ lastRolloverRefusedAt: new Date().toISOString(), lastRolloverRefusedReason: info.reason })
+        },
         onBudgetDegraded: (failures) => writeState({ budgetDegraded: true, budgetConsecutiveFailures: failures }),
       },
       pending,
@@ -93,7 +113,7 @@ export function apply(ctx: Context, config: unknown): void {
     }, `${PLUGIN}: rollover engine`)
     void engine
   } catch (error) {
-    const message = (error as Error).message ?? ''
+    const message = error instanceof Error ? error.message : String(error)
     const holderMatch = /has been registered at <([^>]+)>/.exec(message)
     if (/service ["']?compaction["']? has been registered/i.test(message)) {
       engineMounted = false
@@ -147,7 +167,7 @@ export function apply(ctx: Context, config: unknown): void {
       mkdirSync(dirname(stateFile), { recursive: true })
       writeFileSync(stateFile, `${JSON.stringify(runtimeState, null, 2)}\n`, 'utf8')
     } catch (error) {
-      ctx.logger.warn(`${PLUGIN}: could not write engine-state.json: ${(error as Error).message}`)
+      ctx.logger.warn(`${PLUGIN}: could not write engine-state.json: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   writeState({ engineMounted, slotHolder: engineMounted ? null : slotHolder })

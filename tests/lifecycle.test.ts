@@ -43,8 +43,10 @@ function makeCtx(totalTokens = 0) {
       listeners.set(event, bucket)
     }),
     reflect: { provide: () => {} },
-    // Model cordis: isolate() returns a scoped child context.
-    isolate: vi.fn(() => ctx),
+    // Model cordis: isolate(name) returns a scoped child context; the isolated
+    // service honestly reads as absent through it (reflection is keyed by the
+    // isolate shadow), while every other service still resolves.
+    isolate: vi.fn(() => isolated),
     get: vi.fn(() => undefined),
     tokenMeter: { measure: () => ({ totalTokens, surfaceTokens: 0, baseline: { kind: 'estimated' } }) },
     llm: {
@@ -52,7 +54,25 @@ function makeCtx(totalTokens = 0) {
       stream: vi.fn(),
     },
   }
-  return { ctx: ctx as unknown as Parameters<typeof apply>[0] & CtxLike, registered, effects, listeners }
+  // cordis's isolate() is a LIVE prototype-linked child, not a snapshot:
+  // properties keep resolving through the parent (so a reflect replaced after
+  // makeCtx() is still seen, exactly like the real thing), except the isolated
+  // service name, which honestly reads as undefined.
+  const isolatedGet = vi.fn(() => undefined)
+  const isolated = new Proxy(ctx as unknown as Record<string, unknown>, {
+    get(target, prop, receiver) {
+      if (prop === 'get') return isolatedGet
+      return Reflect.get(target, prop, receiver)
+    },
+  })
+  return {
+    ctx: ctx as unknown as Parameters<typeof apply>[0] & CtxLike,
+    registered,
+    effects,
+    listeners,
+    isolate: ctx.isolate as unknown as ReturnType<typeof vi.fn>,
+    isolatedGet,
+  }
 }
 
 describe('measureBudget / resolveModelTarget', () => {
@@ -106,6 +126,25 @@ describe('apply() lifecycle', () => {
     apply(ctx, { notesDir: await notesDir() })
     const probe = JSON.parse(await readFile(join(home, 'dsh-smart-compact', 'engine-state.json'), 'utf8'))
     expect(probe).toMatchObject({ plugin: 'dsh-smart-compact', engineMounted: true })
+  })
+
+  it('isolates the lagging toolResultPruner service from the engine context', async () => {
+    const { ctx, isolate, isolatedGet } = makeCtx()
+    apply(ctx, { notesDir: await notesDir(), auto: true })
+    expect(isolate).toHaveBeenCalledWith('toolResultPruner')
+    // the engine's view of the service is absent (that is what defuses the
+    // stale third-party pruner) and the apply-time self-check stays silent
+    expect(isolatedGet).toHaveBeenCalledWith('toolResultPruner')
+    expect(isolatedGet('toolResultPruner')).toBeUndefined()
+    expect(ctx.logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('did not take effect'))
+  })
+
+  it('warns when isolation does not take effect (a pruner would abort rollovers)', async () => {
+    const { ctx } = makeCtx()
+    // simulate a no-op isolate(): the engine would get the parent context back
+    ;(ctx as unknown as { isolate: () => unknown }).isolate = () => ({ ...(ctx as unknown as object), get: () => ({ prune: () => {} }) })
+    apply(ctx, { notesDir: await notesDir(), auto: true })
+    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("ctx.isolate('toolResultPruner') did not take effect"))
   })
 
   it('registers exactly four tools with auto=true and arms the engine', async () => {
