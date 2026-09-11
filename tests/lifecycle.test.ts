@@ -67,7 +67,7 @@ describe('measureBudget / resolveModelTarget', () => {
   })
 
   it('fails loud when neither agent options nor request header carry the model', () => {
-    const agent = { session: { id: 'x', events: [] } }
+    const agent = { session: { id: 'x', snapshotEvents: () => [] } }
     expect(() => resolveModelTarget(agent as never)).toThrow(/cannot resolve the routed model for session x/)
   })
 })

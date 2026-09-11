@@ -4,6 +4,7 @@
  * compaction/summary event's shadowedSeqs point back at the original events.
  * @module dsh-smart-compact/history
  */
+import { extractSessionEventText } from '@deepseek-ai/dsh-session-query'
 import { truncateToTokens } from './config.js'
 
 /** Minimal structural view of one durable session event (avoids a hard peer on dsh-session types). */
@@ -21,13 +22,15 @@ export interface SessionEventLike {
  * of degrading to an empty log.
  */
 export interface SessionLogLike {
-  /** Log length as the host reports it (`Session.seq`). */
-  readonly seq?: number
   /** Full durable log in log order (`Session.snapshotEvents()`). */
   snapshotEvents?(fromSeq?: number, toSeqExclusive?: number): readonly SessionEventLike[]
 }
 
-/** Snapshot a session's durable event log, or fail loud naming the missing capability. */
+/**
+ * Snapshot a session's durable event log, or fail loud naming the missing
+ * capability. Pass the Session object itself (never a detached method
+ * reference): the host implementation reads its own state through `this`.
+ */
 export function sessionEvents(session: SessionLogLike): readonly SessionEventLike[] {
   if (typeof session?.snapshotEvents !== 'function') {
     throw new Error(
@@ -51,31 +54,38 @@ export interface EventHit {
   preview: string
 }
 
-/** Extract a flat text projection from any known session event shape. */
+/**
+ * Text projection for one durable event. The host owns this mapping
+ * (`extractSessionEventText`, the very function its own session search indexes
+ * with: conversation events become plain text, tool-result blocks are recursed,
+ * and request/step/header noise projects to the empty string). Reusing it keeps
+ * archived recall identical to the host's view instead of a locally invented
+ * JSON envelope.
+ */
 export function eventText(event: SessionEventLike): string {
-  const data = (event.data ?? {}) as Record<string, unknown>
-  const message = data.message as { content?: Array<{ type?: string; text?: string; name?: string; arguments?: unknown }> } | undefined
-  if (message && Array.isArray(message.content)) {
-    return message.content
-      .map((block) => {
-        if (typeof block.text === 'string') return block.text
-        if (block.arguments !== undefined) return `${String(block.name ?? 'tool')}(${safeJson(block.arguments)})`
-        return safeJson(block)
-      })
-      .join('\n')
+  let hostText: string
+  try {
+    hostText = extractSessionEventText(event as never)
+  } catch {
+    // The host projection is strict about the payloads the host itself
+    // appends; an archived event from another writer must not abort a whole
+    // recall, so it projects to no text (exactly like an unhandled type).
+    hostText = ''
   }
-  if (typeof data.content === 'string') return data.content
-  if (data.summary !== undefined) return safeJson(data.summary)
-  return safeJson(data)
+  if (hostText !== '' || event.type !== 'compaction/summary') return hostText
+  // The host projects conversation events only; the rollover checkpoint is
+  // archived content a reader must still be able to read back verbatim.
+  return summaryText((event.data as { summary?: unknown } | undefined)?.summary)
 }
 
-function safeJson(value: unknown): string {
-  try {
-    const text = JSON.stringify(value)
-    return text === undefined ? String(value) : text
-  } catch {
-    return String(value)
-  }
+/** Flatten a checkpoint summary payload (content blocks or a plain string). */
+function summaryText(summary: unknown): string {
+  if (typeof summary === 'string') return summary
+  if (!Array.isArray(summary)) return ''
+  return summary
+    .map((block) => (block !== null && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string' ? (block as { text: string }).text : ''))
+    .filter((text) => text !== '')
+    .join('\n')
 }
 
 function firstLine(text: string, width = 120): string {

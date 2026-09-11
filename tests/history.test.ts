@@ -3,10 +3,13 @@ import { SessionArchiveReader, eventText, sessionEvents, type SessionEventLike }
 
 function eventsWithOneRollover(): SessionEventLike[] {
   return [
-    { seq: 0, type: 'user/message', data: { message: { content: [{ type: 'text', text: 'fix the login bug, postgres migration is forbidden' }] } } },
+    // Shapes copied from a real session log: user/message carries top-level
+    // content, assistant/message a message.content, tool/call name+arguments,
+    // tool/result a nested tool-result block.
+    { seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: 'fix the login bug, postgres migration is forbidden' }] } },
     { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'working on it' }] } } },
-    { seq: 2, type: 'tool/call', data: { message: { content: [{ type: 'tool-call', name: 'bash', arguments: { command: 'psql -c 1' } }] } } },
-    { seq: 3, type: 'tool/result', data: { content: 'psql: connected' } },
+    { seq: 2, type: 'tool/call', data: { name: 'bash', arguments: '{"command":"psql -c 1"}' } },
+    { seq: 3, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'psql: connected' }] }] } } },
     { seq: 4, type: 'compaction/summary', data: { shadowedSeqs: [0, 1, 2, 3], shadowedRange: { start: 0, end: 3 }, shadowedTokenCount: 5400 } },
     { seq: 5, type: 'user/message', data: { message: { content: [{ type: 'text', text: 'continue' }] } } },
   ]
@@ -57,14 +60,14 @@ describe('SessionArchiveReader.readSeqs', () => {
     const reader = new SessionArchiveReader(eventsWithOneRollover(), 8192)
     const out = reader.readSeqs([2])
     expect(out).toContain('seq 2')
-    expect(out).toContain('bash(')
+    expect(out).toContain('bash')
     expect(() => reader.readSeqs([999])).toThrow(/no archived event with seq 999/)
     expect(() => reader.readSeqs([])).toThrow(/at least one seq/)
   })
 
   it('truncates output when a single body exceeds the token budget', () => {
     const big: SessionEventLike[] = [
-      { seq: 0, type: 'tool/result', data: { content: 'x'.repeat(40_000) } },
+      { seq: 0, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'x'.repeat(40_000) }] }] } } },
       { seq: 1, type: 'compaction/summary', data: { shadowedSeqs: [0], shadowedRange: { start: 0, end: 0 }, shadowedTokenCount: 10_000 } },
     ]
     const reader = new SessionArchiveReader(big, 1024)
@@ -75,11 +78,23 @@ describe('SessionArchiveReader.readSeqs', () => {
 })
 
 describe('eventText', () => {
-  it('projects message content, tool arguments, raw content, and unknown data', () => {
-    expect(eventText({ seq: 0, type: 'user/message', data: { message: { content: [{ type: 'text', text: 'hello' }] } } })).toContain('hello')
-    expect(eventText({ seq: 1, type: 'tool/call', data: { message: { content: [{ type: 'tool-call', name: 'bash', arguments: { a: 1 } }] } } })).toContain('bash(')
-    expect(eventText({ seq: 2, type: 'tool/result', data: { content: 'plain' } })).toBe('plain')
-    expect(eventText({ seq: 3, type: 'compaction/summary', data: { shadowedSeqs: [1] } })).toContain('shadowedSeqs')
-    expect(eventText({ seq: 4, type: 'mystery/event', data: { k: 1 } })).toContain('"k"')
+  it('uses the host projection (plain text, recursed tool results)', () => {
+    expect(eventText({ seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: 'hello' }] } })).toBe('hello')
+    expect(eventText({ seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'working' }] } } })).toBe('working')
+    expect(eventText({ seq: 2, type: 'tool/call', data: { name: 'bash', arguments: '{"a":1}' } })).toContain('bash')
+    const result = eventText({ seq: 3, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'psql: connected' }] }] } } })
+    expect(result).toBe('psql: connected')
+  })
+
+  it('projects request/step noise and unknown types to no text', () => {
+    expect(eventText({ seq: 0, type: 'request/header', data: { header: { big: 'x' } } })).toBe('')
+    expect(eventText({ seq: 1, type: 'step/start', data: { turn: 1, step: 1 } })).toBe('')
+    expect(eventText({ seq: 2, type: 'mystery/event', data: { k: 1 } })).toBe('')
+  })
+
+  it('still reads a rollover checkpoint back verbatim, and survives malformed payloads', () => {
+    expect(eventText({ seq: 0, type: 'compaction/summary', data: { summary: [{ type: 'text', text: '[smart-compact rollover] Context window #2 opened.' }] } })).toContain('Context window #2 opened')
+    // a conversation event with a payload the host would reject must not throw
+    expect(eventText({ seq: 1, type: 'user/message', data: { unexpected: true } })).toBe('')
   })
 })

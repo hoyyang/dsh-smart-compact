@@ -151,7 +151,22 @@ export function apply(ctx: Context, config: unknown): void {
     attachReminder(ctx as never, {
       fallbackBufferTokens: cfg.fallbackBufferTokens,
       getBudget,
-      getWindowGeneration: (session) => windowGeneration(sessionEvents(session as SessionLogLike)),
+      getWindowGeneration: (() => {
+        let warned = false
+        return (session: object): number => {
+          try {
+            return windowGeneration(sessionEvents(session as SessionLogLike))
+          } catch (error) {
+            // Keep the reminder pass alive (briefing + tier nudges share its try
+            // block) and warn once instead of on every assembled prompt.
+            if (!warned) {
+              warned = true
+              ctx.logger.warn(`${PLUGIN}: window generation unavailable — ${(error as Error).message}`)
+            }
+            return 0
+          }
+        }
+      })(),
       logger: ctx.logger,
       pluginName: PLUGIN,
     })
@@ -246,7 +261,7 @@ export function apply(ctx: Context, config: unknown): void {
       switch (args.action) {
         case 'list': {
           const windows = reader.listWindows()
-          if (windows.length === 0) return '(no rollover has happened yet — the whole conversation is still in the live window)'
+          if (windows.length === 0) return '(no rollover has happened yet — the whole conversation is still in the live window)\nlive window: #1'
           return [
             ...windows.map((w) => `window #${w.index}: seqs ${w.startSeq}–${w.endSeq} (${w.shadowedSeqs.length} events, ~${w.shadowedTokenCount} tokens archived)`),
             `live window: #${windows.length + 1} (the rollover handoff header names this window)`,
