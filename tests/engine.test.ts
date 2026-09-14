@@ -263,3 +263,49 @@ describe('basic engine registration (inherited)', () => {
     expect(ctx.listeners.get('agent/request-error')?.length).toBe(1)
   })
 })
+
+describe('RolloverCompactionEngine.compactNow — manual path bookkeeping', () => {
+  it('books the ops probe on success (the manual path used to bypass every onRollover hook)', async () => {
+    const ctx = makeFakeCtx(0)
+    const onRollover = vi.fn()
+    const engine = new RolloverCompactionEngine(
+      ctx as never,
+      { auto: false },
+      { thresholdRatio: 0.85, fallbackBufferTokens: 1000, auto: false, logger: ctx.logger, onRollover },
+      new WeakSet(),
+    )
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactNow: (...a: unknown[]) => unknown }, 'compactNow').mockResolvedValue({
+      compactionId: 'c1', startSeq: 1, summarySeq: 9, endSeq: 10, summary: [],
+      shadowedSeqs: [1, 2, 3], shadowedTokenCount: 100, shadowedRange: { start: 1, end: 3 },
+    })
+    try {
+      const agent = makeAgent()
+      const result = await engine.compactNow(agent as never, new AbortController().signal, 'cmd-1')
+      expect(result).not.toBeNull()
+      expect(superSpy).toHaveBeenCalledTimes(1)
+      expect(onRollover).toHaveBeenCalledTimes(1)
+      expect(onRollover).toHaveBeenCalledWith({ generation: 0, trigger: 'manual' })
+    } finally {
+      superSpy.mockRestore()
+    }
+  })
+
+  it('does not book the probe when nothing was compactable (null is not a rollover)', async () => {
+    const ctx = makeFakeCtx(0)
+    const onRollover = vi.fn()
+    const engine = new RolloverCompactionEngine(
+      ctx as never,
+      { auto: false },
+      { thresholdRatio: 0.85, fallbackBufferTokens: 1000, auto: false, logger: ctx.logger, onRollover },
+      new WeakSet(),
+    )
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactNow: (...a: unknown[]) => unknown }, 'compactNow').mockResolvedValue(null)
+    try {
+      const agent = makeAgent()
+      await expect(engine.compactNow(agent as never, new AbortController().signal, 'cmd-1')).resolves.toBeNull()
+      expect(onRollover).not.toHaveBeenCalled()
+    } finally {
+      superSpy.mockRestore()
+    }
+  })
+})

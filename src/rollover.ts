@@ -266,4 +266,20 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     if (result !== null) this.noteRollover(agent, trigger)
     return result
   }
+
+  /**
+   * Manual /smart-compact path bookkeeping: basic's compactNow runs the
+   * compaction transaction directly (selectCompactableRange + compactSurfaceRegion)
+   * WITHOUT passing through compactIfNeeded, where every onRollover hook lives —
+   * so a successful manual window switch was invisible to the ops probe
+   * (rolloverCount stayed 0 forever). Wrap it: bookkeep on success with the
+   * 'manual' trigger. A null return ("nothing to switch") or a throw is
+   * fail-loud through the command's receipt instead — it is not a rollover
+   * and must not inflate rolloverCount.
+   */
+  override async compactNow(agent: AgentLike, signal?: AbortSignal, sourceCommandId?: string) {
+    const result = await super.compactNow(agent as never, signal as never, sourceCommandId as never)
+    if (result !== null) this.noteRollover(agent, 'manual')
+    return result
+  }
 }

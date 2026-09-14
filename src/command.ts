@@ -6,17 +6,34 @@
  * context window with the zero-model-call handoff template). If another
  * engine owns the compaction slot, the command refuses loudly instead of
  * silently degrading to a lossy summary.
+ *
+ * Receipt design: success leads with a short head line (status marker, new
+ * window number, archived volume) so one-line GUI truncation cannot hide the
+ * key numbers; the body after the first newline makes the dispatching UI
+ * render the card expandable with the full text.
  * @module dsh-smart-compact/command
  */
 import { ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { RolloverCompactionEngine } from './rollover.js'
 
+/** The slice of a compaction result the receipt renders. */
+export interface SmartCompactOutcome {
+  shadowedSeqs: number[]
+  shadowedTokenCount: number
+  summarySeq: number
+  /** Handoff checkpoint blocks; the rollover template carries "Context window #N opened.". Untyped: ContentBlock is a closed union. */
+  summary?: ReadonlyArray<unknown>
+}
+
+/** The slice of a budget snapshot the receipt renders. */
+export interface BudgetLike {
+  totalTokens: number
+  contextWindow: number
+  remaining: number
+}
+
 export interface SmartCompactEngine {
-  compactNow(agent: unknown, signal?: AbortSignal, sourceCommandId?: string): Promise<{
-    shadowedSeqs: number[]
-    shadowedTokenCount: number
-    summarySeq: number
-  } | null>
+  compactNow(agent: unknown, signal?: AbortSignal, sourceCommandId?: string): Promise<SmartCompactOutcome | null>
 }
 
 export interface SmartCompactInvocation {
@@ -38,39 +55,83 @@ export interface SmartCompactDeps {
   /** Name of the engine that owns the slot when yielded. */
   slotHolder?: string
   logger: { info(msg: string): void; warn(msg: string): void; debug(msg: string): void }
+  /** Advisory post-switch budget probe; absent or throwing = the receipt omits the remaining line. */
+  measureRemaining?: (agent: unknown) => Promise<BudgetLike | null>
 }
 
-const USAGE = 'Usage: /smart-compact (no arguments)'
+const USAGE = '用法：/smart-compact（无需参数）'
 
-/** Convert expected capability failures into concise human-only outcomes (official wording). */
+/** Convert expected capability failures into concise human-only outcomes. */
 export function expectedFailure(error: ManualCompactionError): CommandOutcome {
   switch (error.code) {
-    case 'busy': return { kind: 'error', text: 'Smart-compact is unavailable because the agent is not idle. Stop the running task and retry.' }
-    case 'cancelled': return { kind: 'error', text: 'Smart-compact cancelled.' }
-    case 'changed': return { kind: 'error', text: 'The history selected for compaction changed before it could be replaced. The conversation is unchanged; the attempt is recorded in the session log.' }
-    case 'summary': return { kind: 'error', text: 'Smart-compact could not produce the handoff checkpoint. The conversation is unchanged; the attempt is recorded in the session log.' }
-    case 'commit': return { kind: 'error', text: 'Smart-compact did not finish cleanly; some session history may have changed. Inspect the current session state before retrying.' }
-    case 'persistence': return { kind: 'error', text: 'Smart-compact finished, but the session could not be saved.' }
-    default: return { kind: 'error', text: `Smart-compact failed: ${String((error as Error).message ?? error)}` }
+    case 'busy': return { kind: 'error', text: '❌ 未执行换窗：智能体正忙（任务运行中）。等当前任务结束或停止后重试。' }
+    case 'cancelled': return { kind: 'error', text: '❌ 换窗已取消。' }
+    case 'changed': return { kind: 'error', text: '❌ 未执行换窗：待压缩的历史在替换前发生了变化。对话未被改动；本次尝试已记入会话日志。' }
+    case 'summary': return { kind: 'error', text: '❌ 未执行换窗：无法生成交接检查点。对话未被改动；本次尝试已记入会话日志。' }
+    case 'commit': return { kind: 'error', text: '❌ 换窗未干净完成：部分会话历史可能已变化。请先检查当前会话状态再重试。' }
+    case 'persistence': return { kind: 'error', text: '❌ 换窗已完成，但会话保存失败。' }
+    default: return { kind: 'error', text: `❌ 换窗失败：${String((error as Error).message ?? error)}` }
   }
+}
+
+function formatTokens(n: number): string {
+  try { return n.toLocaleString('en-US') } catch { return String(n) }
+}
+
+/** Opened window number parsed from the zero-model handoff template ("Context window #N opened."). */
+function openedWindowNo(result: SmartCompactOutcome): string | null {
+  for (const block of result.summary ?? []) {
+    const text = (block as { text?: unknown } | null)?.text
+    if (typeof text !== 'string') continue
+    const match = /Context window #(\d+) opened/.exec(text)
+    if (match) return match[1]
+  }
+  return null
+}
+
+/** Advisory "remaining budget" line; any hiccup just drops the line. */
+async function remainingLine(deps: SmartCompactDeps, agent: unknown): Promise<string | null> {
+  if (!deps.measureRemaining) return null
+  try {
+    const budget = await deps.measureRemaining(agent)
+    if (!budget || !(budget.contextWindow > 0)) return null
+    const pct = Math.round((budget.remaining / budget.contextWindow) * 100)
+    return `当前剩余预算：约 ${pct}%（${formatTokens(budget.remaining)} / ${formatTokens(budget.contextWindow)} tok）。`
+  } catch { return null }
+}
+
+/**
+ * Human receipt for a committed window switch. First line is short and
+ * carries every key number (status marker, new window number, archived
+ * volume) so GUI one-line truncation cannot hide them; the leading "\n"
+ * makes the dispatching UI render the card expandable with the full text.
+ */
+function successReceipt(result: SmartCompactOutcome, remaining: string | null): string {
+  const windowNo = openedWindowNo(result)
+  const head = `✅ 换窗完成：${windowNo ? `新窗口 #${windowNo}` : '新窗口已就绪'} · 归档 ${result.shadowedSeqs.length} 条 (~${formatTokens(result.shadowedTokenCount)} tok)`
+  const body = [
+    '旧窗口已 100% 机械归档（零模型调用、零摘要损耗）；细节用 ctx_history 逐字召回，工作笔记在 ctx_notes。',
+    remaining,
+  ].filter((line): line is string => line !== null)
+  return [head, ...body].join('\n')
 }
 
 /** Execute one argument-free smart-compact request (always a window switch). */
 export async function executeSmartCompact(deps: SmartCompactDeps, invocation: SmartCompactInvocation): Promise<CommandOutcome> {
   if (invocation.rawInput.trim().length > 0) return { kind: 'error', text: USAGE }
   if (!deps.engine) {
-    return { kind: 'error', text: `Smart-compact is not active: the compaction slot is owned by ${deps.slotHolder ?? 'another engine'}, so a lossless window switch is unavailable. Free the slot (see README) to enable this command.` }
+    return { kind: 'error', text: `❌ 未执行换窗：压缩槽位由 ${deps.slotHolder ?? '其它压缩引擎'} 持有，无损换窗不可用。释放槽位的方法见 README。` }
   }
   try {
     const result = await deps.engine.compactNow(invocation.agent, invocation.signal, invocation.commandId)
-    if (result === null) return { kind: 'error', text: 'Nothing to switch yet — the conversation has no compactable history.' }
+    if (result === null) return { kind: 'error', text: '❌ 未执行换窗：当前对话还没有可归档的历史。' }
     return {
       kind: 'success',
-      text: `Smart-compact done: seamless window switch installed — ${result.shadowedSeqs.length} history items (~${result.shadowedTokenCount} tokens) archived losslessly. Continue working; recall details via ctx_history.`,
+      text: successReceipt(result, await remainingLine(deps, invocation.agent)),
       sourceEventSeq: result.summarySeq,
     }
   } catch (error) {
-    if (invocation.signal.aborted) return { kind: 'error', text: 'Smart-compact cancelled.' }
+    if (invocation.signal.aborted) return { kind: 'error', text: '❌ 换窗已取消。' }
     if (error instanceof ManualCompactionError) return expectedFailure(error)
     throw error
   }

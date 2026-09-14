@@ -1,6 +1,6 @@
 {
   "name": "@dsh-external/dsh-smart-compact",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Codex-style context window auto-management for DSH: budget visibility, rollover compaction engine, notes handoff, history recall",
   "private": true,
   "type": "module",

@@ -129,7 +129,17 @@ export function apply(ctx: Context, config: unknown): void {
   // ── Command: /smart-compact (100% lossless window switch) ────────────────
   registerSmartCompactCommand(
     ctx as never,
-    { engine: engineMounted ? engine : null, slotHolder: engineMounted ? slotHolder : undefined, logger: ctx.logger },
+    {
+      engine: engineMounted ? engine : null,
+      slotHolder: engineMounted ? slotHolder : undefined,
+      logger: ctx.logger,
+      // Advisory post-switch budget for the receipt's "remaining" line; it
+      // shares the engine's isolated context (pruner shadowing is irrelevant
+      // to budget measurement) and must never fail the receipt.
+      measureRemaining: async (agent) => {
+        try { return await measureBudget(engineCtx as never, agent as AgentLike) } catch { return null }
+      },
+    },
   )
 
   const pkgVersion = (() => { try { return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown' } catch { return 'unknown' } })()
