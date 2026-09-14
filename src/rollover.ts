@@ -31,6 +31,14 @@ export interface RolloverEngineConfig {
   onRolloverRefused?: (info: { reason: string }) => void
   /** Called when budget measurement fails repeatedly (degraded visibility). */
   onBudgetDegraded?: (consecutiveFailures: number) => void
+  /**
+   * Notes-presence probe for the handoff anchor (advisory honesty): when it
+   * definitively returns false, summarize() stops claiming the notes channel
+   * holds the handoff (observed: a manual rollover of a session that never
+   * wrote ctx_notes pointed the next window at an empty channel). Absent,
+   * throwing, or true = keep the notes-first anchor.
+   */
+  hasNotes?: (sessionId: string) => Promise<boolean>
 }
 
 interface BasicEngineConfigInput {
@@ -164,18 +172,37 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     // before this rollover's summary event is committed, so the window it opens
     // is generation + 2.
     const generation = windowGeneration(sessionEvents(agent.session))
+    // Anchor honesty: only promise the notes channel when the probe cannot
+    // disprove it. A definitive "no notes" (observed on manual rollovers of
+    // sessions that never wrote ctx_notes) must not point the next window at
+    // an empty channel — say so and route reconstruction to ctx_history.
+    const sessionId = typeof (agent.session as { id?: unknown }).id === 'string' ? (agent.session as { id: string }).id : null
+    const notesAssured = sessionId === null || (await this.notesPresent(sessionId))
+    const [notesLine, carryLine] = notesAssured
+      ? ['Handoff: current goal, decisions, and next steps live in ctx_notes (read it first).', "Continue the user's task from the notes; do not assume anything not written there."]
+      : ['Handoff: no ctx_notes were written in the previous window — there is nothing to read there.', "Continue the user's task; reconstruct any missing context via ctx_history before assuming it."]
     const text = [
       `${ROLLOVER_TEMPLATE_MARKER} Context window #${openedWindowNumber(generation)} opened.`,
       'The previous window was archived in full — no content was summarized or lost.',
-      'Handoff: current goal, decisions, and next steps live in ctx_notes (read it first).',
+      notesLine,
       'Missing details: ctx_history search/read recalls exact original events on demand.',
-      "Continue the user's task from the notes; do not assume anything not written there.",
+      carryLine,
     ].join(' ')
     const summary: ContentBlock[] = [{ type: 'text', text }]
     return {
       summary,
       provider: 'rollover-template',
       model: 'none',
+    }
+  }
+
+  /** Advisory notes probe — absent probe, probe throw, or true all keep the notes-first anchor. */
+  private async notesPresent(sessionId: string): Promise<boolean> {
+    if (!this.rolloverCfg.hasNotes) return true
+    try {
+      return await this.rolloverCfg.hasNotes(sessionId)
+    } catch {
+      return true
     }
   }
 

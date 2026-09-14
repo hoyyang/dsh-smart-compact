@@ -103,6 +103,7 @@ export function apply(ctx: Context, config: unknown): void {
           writeState({ lastRolloverRefusedAt: new Date().toISOString(), lastRolloverRefusedReason: info.reason })
         },
         onBudgetDegraded: (failures) => writeState({ budgetDegraded: true, budgetConsecutiveFailures: failures }),
+        hasNotes: (sessionId) => notes.hasNotes(sessionId),
       },
       pending,
     )
@@ -139,6 +140,7 @@ export function apply(ctx: Context, config: unknown): void {
       measureRemaining: async (agent) => {
         try { return await measureBudget(engineCtx as never, agent as AgentLike) } catch { return null }
       },
+      hasNotes: (sessionId) => notes.hasNotes(sessionId),
     },
   )
 

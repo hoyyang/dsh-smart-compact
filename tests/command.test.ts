@@ -4,7 +4,7 @@ import { ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 
 const invocation = (rawInput = ''): Parameters<typeof executeSmartCompact>[1] => ({
   rawInput,
-  agent: { id: 'a1' },
+  agent: { id: 'a1', session: { id: 'sess-1' } },
   signal: new AbortController().signal,
   commandId: 'cmd-1',
 })
@@ -36,6 +36,21 @@ describe('/smart-compact — 100% lossless window switch', () => {
     expect(out.text).toContain('\n')
     expect(out.sourceEventSeq).toBe(9)
     expect(deps.engine!.compactNow).toHaveBeenCalledWith(inv.agent, inv.signal, 'cmd-1')
+  })
+
+  it('appends the no-notes advisory when the session never wrote ctx_notes', async () => {
+    const deps = makeDeps({ hasNotes: async () => false })
+    const out = await executeSmartCompact(deps, invocation())
+    expect(out.kind).toBe('success')
+    expect(out.text).toContain('⚠️ 上一窗口未写过 ctx_notes')
+    expect(out.text).toContain('ctx_history 召回')
+  })
+
+  it('omits the notes advisory when notes exist or the probe is absent', async () => {
+    const withNotes = await executeSmartCompact(makeDeps({ hasNotes: async () => true }), invocation())
+    expect(withNotes.text).not.toContain('⚠️')
+    const noProbe = await executeSmartCompact(makeDeps(), invocation())
+    expect(noProbe.text).not.toContain('⚠️')
   })
 
   it('omits the window number when the result carries no handoff summary', async () => {

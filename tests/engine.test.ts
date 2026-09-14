@@ -45,7 +45,7 @@ function makeAgent(events: Array<{ seq: number; type: string }> = []) {
   }
 }
 
-function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbackBufferTokens?: number; auto?: boolean }) {
+function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbackBufferTokens?: number; auto?: boolean; hasNotes?: (sessionId: string) => Promise<boolean> }) {
   const pending = new WeakSet<object>()
   const cfg = {
     thresholdRatio: overrides?.thresholdRatio ?? 0.85,
@@ -54,6 +54,7 @@ function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbac
     logger: ctx.logger,
     onRolloverRefused: vi.fn(),
     onBudgetDegraded: vi.fn(),
+    ...(overrides?.hasNotes ? { hasNotes: overrides.hasNotes } : {}),
   }
   const engine = new RolloverCompactionEngine(ctx as never, { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto }, cfg, pending)
   return { engine, pending, cfg }
@@ -90,6 +91,25 @@ describe('RolloverCompactionEngine.summarize — the zero-model-call handoff', (
     expect(result).toMatchObject({ provider: 'rollover-template', model: 'none' })
     expect((result as Record<string, unknown>).llmStreamCall).toBeUndefined()
     expect(ctx.streamCalls).toBe(0)
+  })
+
+  it('switches the anchor to ctx_history recall when the session has no notes (honest handoff)', async () => {
+    const { engine } = makeEngine(makeFakeCtx(0), { hasNotes: async () => false })
+    const agent = makeAgent([])
+    const text = (await engine.summarize({}, agent as never, undefined)).summary[0].text
+    expect(text).toContain('no ctx_notes were written')
+    expect(text).toContain('ctx_history')
+    expect(text).not.toContain('live in ctx_notes')
+  })
+
+  it('keeps the notes-first anchor when notes exist, the probe throws, or it is absent', async () => {
+    const agent = makeAgent([])
+    const truthy = makeEngine(makeFakeCtx(0), { hasNotes: async () => true })
+    expect((await truthy.engine.summarize({}, agent as never, undefined)).summary[0].text).toContain('live in ctx_notes')
+    const throwing = makeEngine(makeFakeCtx(0), { hasNotes: async () => { throw new Error('boom') } })
+    expect((await throwing.engine.summarize({}, agent as never, undefined)).summary[0].text).toContain('live in ctx_notes')
+    const plain = makeEngine(makeFakeCtx(0))
+    expect((await plain.engine.summarize({}, agent as never, undefined)).summary[0].text).toContain('live in ctx_notes')
   })
 })
 

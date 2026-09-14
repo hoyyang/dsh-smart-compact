@@ -98,6 +98,11 @@ export class NotesStore {
     return truncateToTokens(`## notes ${segment.index} — ${segment.writtenAt} ${segment.title}\n${segment.text}`, maxTokens, `ctx_notes read #${segmentIndex}`)
   }
 
+  /** Whether the session has any notes on disk (handoff-anchor honesty probe). */
+  async hasNotes(sessionId: string): Promise<boolean> {
+    return (await this.readRaw(sessionId)) !== ''
+  }
+
   /** Case-folded substring search across segments; returns segment headers plus matching lines. */
   async search(sessionId: string, keyword: string, maxTokens: number): Promise<string> {
     const needle = keyword.trim().toLowerCase()

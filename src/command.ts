@@ -57,6 +57,8 @@ export interface SmartCompactDeps {
   logger: { info(msg: string): void; warn(msg: string): void; debug(msg: string): void }
   /** Advisory post-switch budget probe; absent or throwing = the receipt omits the remaining line. */
   measureRemaining?: (agent: unknown) => Promise<BudgetLike | null>
+  /** Advisory notes probe; absent or throwing = the receipt omits the no-notes advisory line. */
+  hasNotes?: (sessionId: string) => Promise<boolean>
 }
 
 const USAGE = '用法：/smart-compact（无需参数）'
@@ -106,14 +108,28 @@ async function remainingLine(deps: SmartCompactDeps, agent: unknown): Promise<st
  * volume) so GUI one-line truncation cannot hide them; the leading "\n"
  * makes the dispatching UI render the card expandable with the full text.
  */
-function successReceipt(result: SmartCompactOutcome, remaining: string | null): string {
+function successReceipt(result: SmartCompactOutcome, remaining: string | null, notesAdvisory: string | null): string {
   const windowNo = openedWindowNo(result)
   const head = `✅ 换窗完成：${windowNo ? `新窗口 #${windowNo}` : '新窗口已就绪'} · 归档 ${result.shadowedSeqs.length} 条 (~${formatTokens(result.shadowedTokenCount)} tok)`
   const body = [
     '旧窗口已 100% 机械归档（零模型调用、零摘要损耗）；细节用 ctx_history 逐字召回，工作笔记在 ctx_notes。',
+    notesAdvisory,
     remaining,
   ].filter((line): line is string => line !== null)
   return [head, ...body].join('\n')
+}
+
+/** Advisory "no notes" line; absent probe, missing session id, or any hiccup just drops the line. */
+async function missingNotesLine(deps: SmartCompactDeps, agent: unknown): Promise<string | null> {
+  if (!deps.hasNotes) return null
+  try {
+    const sessionId = (agent as { session?: { id?: unknown } } | null | undefined)?.session?.id
+    if (typeof sessionId !== 'string') return null
+    if (await deps.hasNotes(sessionId)) return null
+    return '⚠️ 上一窗口未写过 ctx_notes：新窗口的交接锚点已按「ctx_history 召回」模式生成；重要任务建议换窗前先写笔记。'
+  } catch {
+    return null
+  }
 }
 
 /** Execute one argument-free smart-compact request (always a window switch). */
@@ -127,7 +143,7 @@ export async function executeSmartCompact(deps: SmartCompactDeps, invocation: Sm
     if (result === null) return { kind: 'error', text: '❌ 未执行换窗：当前对话还没有可归档的历史。' }
     return {
       kind: 'success',
-      text: successReceipt(result, await remainingLine(deps, invocation.agent)),
+      text: successReceipt(result, await remainingLine(deps, invocation.agent), await missingNotesLine(deps, invocation.agent)),
       sourceEventSeq: result.summarySeq,
     }
   } catch (error) {
