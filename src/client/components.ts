@@ -5,7 +5,6 @@
  */
 
 import React from 'react'
-import { CORE_URI } from './assets.js'
 
 /** Copy table; the plugin registers no locale service (context economy). */
 const COPY_ZH = {
@@ -70,6 +69,19 @@ function readDraft(props: SeatProps): string {
   return typeof fallback === 'string' ? fallback : ''
 }
 
+/** Crisp white glyph: two chevrons collapsing into the center slot — the
+ * rollover mark. Pure SVG so it stays razor-sharp next to the host's 16px
+ * icons; the vortex texture lives under it in the plate (::after in styles). */
+function Glyph(): React.ReactElement {
+  return React.createElement('svg', { className: 'dsc-glyph', viewBox: '0 0 16 16', width: '16', height: '16', 'aria-hidden': 'true', focusable: 'false' },
+  React.createElement('g', { fill: 'none', stroke: 'currentColor', strokeWidth: '1.7', strokeLinecap: 'round', strokeLinejoin: 'round' },
+  React.createElement('path', { className: 'dsc-g-top', d: 'M5 2.4L8 5.1L11 2.4' }),
+  React.createElement('path', { className: 'dsc-g-slot', d: 'M3.4 8H12.6' }),
+  React.createElement('path', { className: 'dsc-g-bot', d: 'M5 13.6L8 10.9L11 13.6' }),
+  ),
+  )
+}
+
 /**
  * The rollover button: one click writes the command into the composer and
  * submits it through the host's own send path — pixel-for-pixel the same route
@@ -110,8 +122,7 @@ export function CompactButton(props: SeatProps): React.ReactElement {
     title: t.title,
     onClick,
   },
-  React.createElement('span', { className: 'dsc-orbit', 'aria-hidden': 'true' }),
-  React.createElement('span', { className: 'dsc-core', 'aria-hidden': 'true', style: { WebkitMaskImage: 'url("' + CORE_URI + '")', maskImage: 'url("' + CORE_URI + '")' } }),
+  React.createElement(Glyph, null),
   React.createElement('span', { className: 'dsc-burst', 'aria-hidden': 'true', key: String(busy) }),
   )
 }

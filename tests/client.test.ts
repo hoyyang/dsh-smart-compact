@@ -1,11 +1,8 @@
-// @vitest-environment node
-/**
- * Client-half regression: the rollover click flow and the rendered shape.
- *
- * The click flow is the plugin's one behavioural promise — click == /smart-compact,
- * draft preserved — asserted here against a recorded action face; the markup test
- * pins the plate structure the stylesheet keys on.
- */
+// Client-half regression: the rollover click flow and the rendered shape.
+//
+// The click flow is the plugin's one behavioural promise — click == /smart-compact,
+// draft preserved — asserted here against a recorded action face; the markup test
+// pins the plate structure the stylesheet keys on.
 import { describe, expect, it } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -51,14 +48,16 @@ describe('runRollover', () => {
 })
 
 describe('CompactButton markup', () => {
-  it('renders the plate with orbit, core and burst layers', () => {
+  it('renders the plate with the glyph and burst layers', () => {
     const html = renderToStaticMarkup(React.createElement(CompactButton, {
       sessionId: 's1',
       inputActions: recordActions(),
     }))
     expect(html).toContain('dsc-btn')
-    expect(html).toContain('dsc-orbit')
-    expect(html).toContain('dsc-core')
+    expect(html).toContain('dsc-glyph')
+    expect(html).toContain('dsc-g-top')
+    expect(html).toContain('dsc-g-slot')
+    expect(html).toContain('dsc-g-bot')
     expect(html).toContain('dsc-burst')
     expect(html).toContain('aria-label')
   })

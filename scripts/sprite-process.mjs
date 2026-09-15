@@ -77,6 +77,33 @@ for (let y = 0; y < height; y++) {
 // ---------- luminance → alpha (crushed floor, gentle lift) ----------
 const FLOOR = 10
 const GAMMA = 0.85
+// Identity tint ramp: mint highlight through teal into electric blue, ending in
+// indigo at the bottom edge — the button's own palette, baked into the sprite so
+// the core needs no runtime mask (a failed mask-image renders fully transparent,
+// which shipped as an all-black button once already).
+const RAMP = [
+  [0.0, [234, 255, 251]],
+  [0.35, [94, 234, 212]],
+  [0.55, [45, 212, 191]],
+  [0.8, [59, 130, 246]],
+  [1.0, [99, 102, 241]],
+]
+const rampAt = (t) => {
+  const c = Math.min(1, Math.max(0, t))
+  for (let i = 1; i < RAMP.length; i++) {
+    if (c <= RAMP[i][0]) {
+      const [t0, c0] = RAMP[i - 1]
+      const [t1, c1] = RAMP[i]
+      const k = t1 === t0 ? 0 : (c - t0) / (t1 - t0)
+      return [
+        Math.round(c0[0] + (c1[0] - c0[0]) * k),
+        Math.round(c0[1] + (c1[1] - c0[1]) * k),
+        Math.round(c0[2] + (c1[2] - c0[2]) * k),
+      ]
+    }
+  }
+  return RAMP[RAMP.length - 1][1]
+}
 const rgba = Buffer.alloc(width * height * 4)
 for (let i = 0; i < width * height; i++) {
   const o = i * channels
@@ -84,9 +111,13 @@ for (let i = 0; i < width * height; i++) {
   if (channels === 1) lum = pixels[o]
   else lum = Math.round(0.2126 * pixels[o] + 0.7152 * pixels[o + 1] + 0.0722 * pixels[o + 2])
   const a = lum <= FLOOR ? 0 : Math.min(255, Math.round(Math.pow((lum - FLOOR) / (255 - FLOOR), GAMMA) * 255))
-  rgba[i * 4] = 255
-  rgba[i * 4 + 1] = 255
-  rgba[i * 4 + 2] = 255
+  // Brighter core pixels sit higher on the ramp highlight; Y drags the hue down
+  // toward blue/indigo at the sprite's bottom edge.
+  const y = Math.floor(i / width)
+  const [r, g, b] = rampAt(y / Math.max(1, height - 1) * 0.55 + (lum / 255) * 0.45)
+  rgba[i * 4] = r
+  rgba[i * 4 + 1] = g
+  rgba[i * 4 + 2] = b
   rgba[i * 4 + 3] = a
 }
 
