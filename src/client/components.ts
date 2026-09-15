@@ -6,19 +6,12 @@
 
 import React from 'react'
 
-/** Copy table; the plugin registers no locale service (context economy). */
-const COPY_ZH = {
-  aria: '立即换窗',
-  title: '立即换窗（等同执行 /smart-compact：归档本窗口全部内容后开启新窗口，草稿不会被清除）',
-}
-const COPY_EN = {
-  aria: 'Rollover now',
-  title: 'Rollover now (equivalent to running /smart-compact: archives this window in full and opens a new one; your draft is preserved)',
-}
-type Copy = typeof COPY_ZH
-
-function copy(): Copy {
-  return typeof navigator !== 'undefined' && navigator.language !== undefined && navigator.language.toLowerCase().startsWith('zh') ? COPY_ZH : COPY_EN
+/** Copy: concise Chinese for everyone — the user reads Chinese, the command
+ * itself stays in English. No navigator-language guessing (the user's browser
+ * reported a non-zh locale and shipped an English tooltip once). */
+const COPY = {
+  aria: '一键换窗',
+  title: '一键换窗 = /smart-compact（归档本窗口、开新窗，草稿保留）',
 }
 
 /** Props the conversation renderer injects into a session-scoped slot entry. */
@@ -81,7 +74,7 @@ function readDraft(props: SeatProps): string {
  * command's asynchronous settlement untouched.
  */
 export function CompactButton(props: SeatProps): React.ReactElement {
-  const t = copy()
+  const t = COPY
   const [busy, setBusy] = React.useState(false)
   const timer = React.useRef<number | null>(null)
   React.useEffect(() => () => {
