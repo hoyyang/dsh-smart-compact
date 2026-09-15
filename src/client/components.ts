@@ -69,11 +69,11 @@ function readDraft(props: SeatProps): string {
   return typeof fallback === 'string' ? fallback : ''
 }
 
-/** Crisp white glyph: two chevrons collapsing into the center slot — the
- * rollover mark. Pure SVG so it stays razor-sharp next to the host's 16px
+/** Crisp warm-white glyph: two chevrons collapsing into the center slot — the
+ * rollover mark. Pure SVG so it stays razor-sharp next to the host's small
  * icons; the vortex texture lives under it in the plate (::after in styles). */
 function Glyph(): React.ReactElement {
-  return React.createElement('svg', { className: 'dsc-glyph', viewBox: '0 0 16 16', width: '16', height: '16', 'aria-hidden': 'true', focusable: 'false' },
+  return React.createElement('svg', { className: 'dsc-glyph', viewBox: '0 0 16 16', width: '13', height: '13', 'aria-hidden': 'true', focusable: 'false' },
   React.createElement('g', { fill: 'none', stroke: 'currentColor', strokeWidth: '1.7', strokeLinecap: 'round', strokeLinejoin: 'round' },
   React.createElement('path', { className: 'dsc-g-top', d: 'M5 2.4L8 5.1L11 2.4' }),
   React.createElement('path', { className: 'dsc-g-slot', d: 'M3.4 8H12.6' }),
