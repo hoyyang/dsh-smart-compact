@@ -32,6 +32,17 @@ Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 
 |---|---|
 | `/smart-compact` | **100% 触发无缝换窗**：立即开一张新窗口，旧窗口内容无损归档（零模型调用），任务连续性由 ctx_notes + ctx_history 保证。槽位被其它压缩引擎占用时该命令会明确报错（fail loud），绝不静默降级为摘要压缩。回执为人读中文：成功带 ✅ 前缀 + 新窗口号 + 归档量（首行短、防 GUI 截断），点击卡片可展开全文（含换窗后剩余预算）；失败/异常带 ❌ 前缀。**交接锚点诚实化（v0.3.2）**：换窗前若本会话从未写过 ctx_notes，新窗口锚点自动降级为「ctx_history 召回」模式（不再指向空笔记），回执同步给出 ⚠️ 提示——建议重要任务在换窗前先写笔记。 |
 
+## Composer button 一键换窗按钮（v0.4.0）
+
+输入框工具行**发送按钮左侧**新增一枚 31px 圆形按钮（深海军蓝玻璃 + 青蓝渐变光核），点击等同执行 `/smart-compact`——它把命令写入输入框并走宿主**原生提交通道**（与手动键入后回车完全同一条路径：adjudication → 执行 → 回执渲染全部由宿主负责）。
+
+The composer tool row gains a 31px circular button right before the submit action (deep-navy glass with a teal-to-blue generated core). One click is equivalent to running `/smart-compact`: it writes the command into the composer and submits through the host's own send path, so adjudication, execution, and the receipt render exactly as if you had typed it.
+
+- **草稿保护 / Draft safety**：点击时输入框里有未发送文字 → 自动保存并在命令提交后原样恢复（对照宿主 input machine 源码验证：bare-token 清空仅在草稿恰好等于命令本身时发生）。If the composer holds unsent text, it is restored verbatim right after the command is captured.
+- **零新增 host 面 / No new host surface**：无新路由、无新工具注册；客户端仅依赖官方 slots 服务，卸载即净。No new routes or tools; the client half only uses the official slots service.
+- **动效 / Motion**：悬停光环旋转 + 环境辉光；点击冲击波 + 光核旋转压缩；执行期描边弧加速。遵循 `prefers-reduced-motion`。Hover spins an orbit ring with ambient glow; a click fires a shockwave burst and the core rolls with a compress pulse; all motion respects `prefers-reduced-motion`.
+- **重生成 sprite / Regenerating the sprite**：美术源经 dsh-image-gen 生成（image-prompt `brand-identity-package` 模板），`node scripts/sprite-process.mjs <in.png> <out.png>` 做亮度→alpha 转换后内联进 `src/client/assets.ts`——形来自模型、色来自代码。
+
 ## How rollover works 换窗原理（说人话）
 
 上下文快满（默认窗口的 85%）时不再"把旧对话压成摘要"，而是：先把旧窗口整体**原封不动存档**（本来就有的会话持久化流，零新存储）→ 留 8192 token 缓冲让模型写交接笔记 → 然后开一张干净的新窗口，窗口里只放一段固定模板（"旧窗口已完整存档，当前状态在 ctx_notes，细节用 ctx_history 查"）。全程**不调用一次摘要模型**；旧内容无损、随时可精确回读。
@@ -77,7 +88,8 @@ Uninstall removes every tool, listener, and engine with the plugin fiber; notes 
 
 ## Verification status 验证声明
 
-- Vitest 71 项单元测试：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离（`vitest.config.ts` 给整轮测试一个临时 home——此前跑测试会把真实 `engine-state.json` 覆盖成合成数据，已实测复现并修掉）、pruner 隔离接线与自检、非 Error 抛出/中止信号/预算记账、手动路径探针记账与回执文案等回归用例。
+- Vitest 80 项单元测试（v0.4.0 新增 5 项客户端回归：按钮点击流「写入命令→提交→草稿恢复」三段调用序 + 渲染结构 plate/orbit/core/burst 分层与无 session 时 inert）：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离（`vitest.config.ts` 给整轮测试一个临时 home——此前跑测试会把真实 `engine-state.json` 覆盖成合成数据，已实测复现并修掉）、pruner 隔离接线与自检、非 Error 抛出/中止信号/预算记账、手动路径探针记账与回执文案等回归用例。
+- **客户端装配实证（v0.4.0）**：lib/client.js 经 tsdown 构建（21.9 kB，含内联 sprite），宿主 client-modules 表已注册（client check: lib/client.js）；boot-check.sh 冷启动三故障静态检测全绿 + --dump-config 组合复检通过；注入器自检 8/8 PASS。
 - **端到端实证（staging 隔离，真实模型 glm-5.3-flash）**：模型依次调用 `get_context_remaining` → `ctx_notes`（写交接笔记）→ `new_context` → `ctx_history` 全链路成功；`new_context` 触发真实 rollover（`rolloverCount: 1`），`ctx_history` 回读到已归档窗口（window #1, ~5965 tokens archived）。
 - 隔离 staging 环境通过 `dsh --dump-config` 组合预检 + 真 boot 后才允许转正；运行模式用 `engine-state.json` 探针可查。
 - **真机换窗实证（本机真实会话）**：`new_context` → 换窗提交（`rolloverCount: 1`、`lastRolloverTrigger: new_context`、`lastRolloverRefusedReason: null`）→ 窗口 #1 全量归档（393 events / ~307k tokens）→ 新窗口 handoff 头为 `Context window #2 opened` → 跨窗 `ctx_history search` 命中 23 条；主 home `boot-check.sh` 冷启动三故障静态检测全绿。
