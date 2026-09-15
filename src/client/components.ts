@@ -69,19 +69,6 @@ function readDraft(props: SeatProps): string {
   return typeof fallback === 'string' ? fallback : ''
 }
 
-/** Crisp warm-white glyph: two chevrons collapsing into the center slot — the
- * rollover mark. Pure SVG so it stays razor-sharp next to the host's small
- * icons; the vortex texture lives under it in the plate (::after in styles). */
-function Glyph(): React.ReactElement {
-  return React.createElement('svg', { className: 'dsc-glyph', viewBox: '0 0 16 16', width: '13', height: '13', 'aria-hidden': 'true', focusable: 'false' },
-  React.createElement('g', { fill: 'none', stroke: 'currentColor', strokeWidth: '1.7', strokeLinecap: 'round', strokeLinejoin: 'round' },
-  React.createElement('path', { className: 'dsc-g-top', d: 'M5 2.4L8 5.1L11 2.4' }),
-  React.createElement('path', { className: 'dsc-g-slot', d: 'M3.4 8H12.6' }),
-  React.createElement('path', { className: 'dsc-g-bot', d: 'M5 13.6L8 10.9L11 13.6' }),
-  ),
-  )
-}
-
 /**
  * The rollover button: one click writes the command into the composer and
  * submits it through the host's own send path — pixel-for-pixel the same route
@@ -122,7 +109,6 @@ export function CompactButton(props: SeatProps): React.ReactElement {
     title: t.title,
     onClick,
   },
-  React.createElement(Glyph, null),
   React.createElement('span', { className: 'dsc-burst', 'aria-hidden': 'true', key: String(busy) }),
   )
 }

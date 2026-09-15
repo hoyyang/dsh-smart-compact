@@ -48,16 +48,12 @@ describe('runRollover', () => {
 })
 
 describe('CompactButton markup', () => {
-  it('renders the plate with the glyph and burst layers', () => {
+  it('renders the plate with the burst layer', () => {
     const html = renderToStaticMarkup(React.createElement(CompactButton, {
       sessionId: 's1',
       inputActions: recordActions(),
     }))
     expect(html).toContain('dsc-btn')
-    expect(html).toContain('dsc-glyph')
-    expect(html).toContain('dsc-g-top')
-    expect(html).toContain('dsc-g-slot')
-    expect(html).toContain('dsc-g-bot')
     expect(html).toContain('dsc-burst')
     expect(html).toContain('aria-label')
   })
