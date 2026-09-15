@@ -28,9 +28,15 @@ import { requestRollover, consumeRollover, type PendingRollover } from './new-co
 import { attachReminder } from './reminder.js'
 import { RolloverCompactionEngine, windowGeneration } from './rollover.js'
 import { registerSmartCompactCommand } from './command.js'
+import { registerStateRoute } from './state.js'
 
 export const name = '@dsh-external/dsh-smart-compact'
-export const inject = ['tools', 'commands', 'llm', 'tokenMeter', 'sessions']
+// 'webServer' powers the composer button's availability route and 'agents'
+// resolves the live session for it (cordis rule: every ctx.<service> a plugin
+// touches must be declared here — an undeclared access throws). Profiles
+// without a web server do not mount this plugin (headless bundles it out),
+// so the requirements are safe.
+export const inject = ['tools', 'commands', 'llm', 'tokenMeter', 'sessions', 'webServer', 'agents']
 
 export { Config } from './config.js'
 
@@ -144,6 +150,22 @@ export function apply(ctx: Context, config: unknown): void {
     },
   )
 
+  // ── Button state route: semantic availability for the composer button ────
+  // The client button is inert while the live window has nothing to archive
+  // (fresh window right after a rollover, brand-new session) — the exact
+  // "nothing to switch" condition the command receipt reports. Skipped with
+  // an info line on profiles without a webServer; fail-open for the client.
+  let stateRouteError: string | null = null
+  try {
+    registerStateRoute(ctx as never, {
+      engineMounted,
+      slotHolder: engineMounted ? undefined : slotHolder,
+      logger: ctx.logger,
+    })
+  } catch (error) {
+    stateRouteError = (error instanceof Error ? error.stack ?? error.message : String(error)).slice(0, 2000)
+  }
+
   const pkgVersion = (() => { try { return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? 'unknown' } catch { return 'unknown' } })()
 
   // ── Status probe: durable, human-inspectable RUNTIME state ───────────────
@@ -182,7 +204,7 @@ export function apply(ctx: Context, config: unknown): void {
       ctx.logger.warn(`${PLUGIN}: could not write engine-state.json: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  writeState({ engineMounted, slotHolder: engineMounted ? null : slotHolder })
+  writeState({ engineMounted, slotHolder: engineMounted ? null : slotHolder, ...(stateRouteError !== null ? { stateRouteError } : {}) })
 
   const getBudget = (session: object) => {
     const agent = session as AgentLike

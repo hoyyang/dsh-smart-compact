@@ -1,6 +1,13 @@
 /**
  * The one visible piece: the composer rollover button.
  *
+ * Availability is semantic (v0.4.3): the button goes inert while the live
+ * window has nothing to archive — right after a completed /smart-compact the
+ * fresh window holds only the handoff checkpoint, so a second click would
+ * just buy the host's "nothing to archive" error. The host half publishes
+ * that condition on one same-origin state route; until state arrives (or if
+ * it never does) the button fails OPEN and stays clickable.
+ *
  * @module dsh-smart-compact/client/components
  */
 
@@ -34,6 +41,63 @@ export interface InputActionsFace {
 const COMMAND = '/smart-compact'
 /** How long the click animation plays; pure cosmetics, not an execution estimate. */
 const BUSY_MS = 1200
+/** Steady-state poll interval for the availability route (localhost JSON, cheap). */
+const POLL_MS = 4000
+/** Post-click catch-up probes: the rollover commits asynchronously, so the
+ * first refresh may still read the pre-click window. */
+const CLICK_REFRESH_MS = [BUSY_MS + 150, BUSY_MS + 1400, BUSY_MS + 3000]
+
+/** The host-reported availability state (see src/state.ts for the authority). */
+export interface WindowState {
+  ok: boolean
+  engineMounted?: boolean
+  slotHolder?: string | null
+  windowNo?: number | null
+  archivable?: boolean
+  reason?: string
+  detail?: string
+}
+
+/**
+ * Fetch the availability route. Any failure (route absent on an older host
+ * half, headless profile, transient hiccup) resolves null — the caller fails
+ * open. Returns null on non-2xx too: the state route speaks only in bodies.
+ */
+export async function fetchWindowState(sessionId: string, signal?: AbortSignal): Promise<WindowState | null> {
+  try {
+    const res = await fetch('/dsh-smart-compact/state?sessionId=' + encodeURIComponent(sessionId), { signal })
+    if (!res.ok) return null
+    const body = (await res.json()) as WindowState
+    return body !== null && typeof body === 'object' ? body : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The inert decision, factored out for unit tests. A missing state (route
+ * absent, fetch failed, first load in flight) fails OPEN: the button stays
+ * clickable and a click gets the authoritative receipt from the host.
+ */
+export function isInert(propsMissing: boolean, state: WindowState | null | undefined): boolean {
+  if (propsMissing) return true
+  if (!state || state.ok !== true) return false
+  if (state.engineMounted === false) return true
+  return state.archivable === false
+}
+
+/** Tooltip text for the current state; explains WHY the button is inert. */
+export function buttonTitle(state: WindowState | null | undefined): string {
+  if (state !== null && state !== undefined && state.ok === true) {
+    if (state.engineMounted === false) {
+      return '换窗不可用：压缩槽位由' + (state.slotHolder ?? '其它压缩引擎') + '持有'
+    }
+    if (state.archivable === false) {
+      return '窗口 #' + String(state.windowNo ?? '?') + ' 刚开、暂无可归档历史；发送下一条消息后可再次换窗'
+    }
+  }
+  return COPY.title
+}
 
 /**
  * The click flow, factored out for unit tests: freeze the command into the
@@ -68,6 +132,10 @@ function readDraft(props: SeatProps): string {
  * an Enter press on a typed `/smart-compact` takes (adjudication, execution,
  * receipt rendering are all host-owned).
  *
+ * Availability: inert while the host reports "nothing to archive" (fresh
+ * window after a rollover) or a foreign compaction engine holds the slot —
+ * polled so it re-enables by itself once the next real exchange lands.
+ *
  * Draft safety, measured against the host input machine: a bare-token command
  * consume clears the composer ONLY while the composer text equals the token,
  * so the pre-click draft is restored right after submit and survives the
@@ -76,30 +144,82 @@ function readDraft(props: SeatProps): string {
 export function CompactButton(props: SeatProps): React.ReactElement {
   const t = COPY
   const [busy, setBusy] = React.useState(false)
-  const timer = React.useRef<number | null>(null)
+  const [windowState, setWindowState] = React.useState<WindowState | null>(null)
+  const timers = React.useRef<Set<number>>(new Set())
   React.useEffect(() => () => {
-    if (timer.current !== null) window.clearTimeout(timer.current)
+    for (const id of timers.current) window.clearTimeout(id)
+    timers.current.clear()
   }, [])
 
-  const draft = readDraft(props)
+  const sessionMissing = props.sessionId === undefined || props.inputActions === undefined
+  const inert = isInert(sessionMissing, windowState)
+
+  // Availability poll: fetch once per session, then keep the truth fresh at a
+  // slow tick (auto-rollovers and other windows flip the state too). Stops
+  // clearing timers on session switch — the cleanup covers both loops.
+  React.useEffect(() => {
+    if (typeof props.sessionId !== 'string') {
+      setWindowState(null)
+      return undefined
+    }
+    const sessionId = props.sessionId
+    let alive = true
+    const schedule = (fn: () => void, ms: number): void => {
+      const id = window.setTimeout(() => {
+        timers.current.delete(id)
+        if (alive) fn()
+      }, ms)
+      timers.current.add(id)
+    }
+    const tick = (): void => {
+      void (async () => {
+        const state = await fetchWindowState(sessionId)
+        if (!alive) return
+        setWindowState(state)
+        schedule(tick, POLL_MS)
+      })()
+    }
+    tick()
+    return () => { alive = false }
+  }, [props.sessionId])
+
+  const refresh = React.useCallback((sessionId: string) => {
+    for (const ms of CLICK_REFRESH_MS) {
+      const id = window.setTimeout(() => {
+        timers.current.delete(id)
+        void (async () => {
+          const state = await fetchWindowState(sessionId)
+          setWindowState((previous) => (state === null ? previous : state))
+        })()
+      }, ms)
+      timers.current.add(id)
+    }
+  }, [])
+
   const actions = props.inputActions
+  const draft = readDraft(props)
 
   const onClick = React.useCallback(() => {
-    if (busy) return
+    if (busy || inert) return
     if (props.sessionId === undefined || actions === undefined) return
     runRollover(draft, actions)
     setBusy(true)
-    if (timer.current !== null) window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(() => setBusy(false), BUSY_MS)
-  }, [actions, busy, draft, props.sessionId])
+    refresh(props.sessionId)
+    const id = window.setTimeout(() => {
+      timers.current.delete(id)
+      setBusy(false)
+    }, BUSY_MS)
+    timers.current.add(id)
+  }, [actions, busy, draft, inert, props.sessionId, refresh])
 
   return React.createElement('button', {
     type: 'button',
     className: 'dsc-btn',
     'data-busy': busy ? 'true' : 'false',
-    'data-inert': props.sessionId === undefined || actions === undefined ? 'true' : 'false',
+    'data-inert': inert ? 'true' : 'false',
     'aria-label': t.aria,
-    title: t.title,
+    'aria-disabled': inert ? 'true' : 'false',
+    title: buttonTitle(windowState),
     onClick,
   },
   React.createElement('span', { className: 'dsc-burst', 'aria-hidden': 'true', key: String(busy) }),

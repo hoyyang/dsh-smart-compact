@@ -35,6 +35,13 @@ export const css = [
   `.dsc-btn:active{transform:scale(.92)}`,
   `.dsc-btn:focus-visible{outline:2px solid rgba(255,190,80,.85);outline-offset:2px}`,
   `.dsc-btn[data-inert='true']{opacity:.45;cursor:default}`,
+  // Inert must read as inert: no hover glow, no hover brightening, no vortex
+  // speed-up, no press scale — a disabled-looking plate stays motionless.
+  `.dsc-btn[data-inert='true']:hover{-webkit-filter:none;filter:none;box-shadow:inset 0 1px 0 rgba(255,230,170,.4),inset 0 -8px 14px rgba(30,18,2,.5),0 1px 5px rgba(60,35,0,.45)}`,
+  `.dsc-btn[data-inert='true']:hover::before{opacity:0}`,
+  `.dsc-btn[data-inert='true']:hover::after{opacity:.88;animation-duration:16s}`,
+  `.dsc-btn[data-inert='true']:active{transform:none}`,
+  `.dsc-btn[data-busy='true']{cursor:progress}`,
 
   // Halo: hover-only ambient glow outside the plate.
   `.dsc-btn::before{content:'';position:absolute;inset:-7px;border-radius:999px;background:radial-gradient(closest-side,rgba(255,180,60,.42),rgba(255,140,30,.16) 62%,transparent 78%);opacity:0;transition:opacity .28s ease;pointer-events:none}`,

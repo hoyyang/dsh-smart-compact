@@ -32,7 +32,7 @@ Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 
 |---|---|
 | `/smart-compact` | **100% 触发无缝换窗**：立即开一张新窗口，旧窗口内容无损归档（零模型调用），任务连续性由 ctx_notes + ctx_history 保证。槽位被其它压缩引擎占用时该命令会明确报错（fail loud），绝不静默降级为摘要压缩。回执为人读中文：成功带 ✅ 前缀 + 新窗口号 + 归档量（首行短、防 GUI 截断），点击卡片可展开全文（含换窗后剩余预算）；失败/异常带 ❌ 前缀。**交接锚点诚实化（v0.3.2）**：换窗前若本会话从未写过 ctx_notes，新窗口锚点自动降级为「ctx_history 召回」模式（不再指向空笔记），回执同步给出 ⚠️ 提示——建议重要任务在换窗前先写笔记。 |
 
-## Composer button 一键换窗按钮（v0.4.2）
+## Composer button 一键换窗按钮（v0.4.3）
 
 输入框工具行**发送键左侧、上下文消耗表右侧**固定一枚 **26px 正圆按钮**（琥珀金涡流 + 暗铜渐变盘），点击等同执行 `/smart-compact`——它把命令写入输入框并走宿主**原生提交通道**（与手动键入后回车完全同一条路径：adjudication → 执行 → 回执渲染全部由宿主负责）。
 
@@ -41,8 +41,9 @@ The composer tool row carries a **26px perfect-circle button** (amber-gold vorte
 - **正圆保证 / Perfect circle**: 几何属性全部 `!important` 锁定，外加 **`clip-path: circle(50%)`** 物理裁切——宿主工具行自带的 `!important` 级按钮通配样式也压不扁（实测对抗验证）。Geometry is locked with !important and physically clipped by clip-path, immune to the host's own important row-button rules.
 - **草稿保护 / Draft safety**: 点击时未发送文字自动保存、命令捕获后原样恢复（对照宿主 input machine 源码：bare-token 清空仅在草稿恰等于命令时发生）。Unsent text is restored verbatim after the command is captured.
 - **动效 / Motion**: 悬停光环 + 涡流加速旋转；点击金色冲击波 + 涡流快滚；遵循 `prefers-reduced-motion`。Hover glow with a faster vortex spin; click fires a gold burst and a fast roll; honors `prefers-reduced-motion`.
-- **悬停提示 / Tooltip**: 精简汉语（命令名保留英文）：「一键换窗 = /smart-compact（归档本窗口、开新窗，草稿保留）」。Concise Chinese tooltip; the command name stays English.
-- **零新增 host 面 / No new host surface**: 无新路由、无新工具注册；客户端仅依赖官方 slots 服务，卸载即净。No new routes or tools; the client half only uses the official slots service.
+- **悬停提示 / Tooltip**: 精简汉语（命令名保留英文），并随状态变化——可点时「一键换窗 = /smart-compact（归档本窗口、开新窗，草稿保留）」；刚换完窗时「窗口 #N 刚开、暂无可归档历史；发送下一条消息后可再次换窗」；槽位被占时「换窗不可用：压缩槽位由 XX 持有」。State-aware Chinese tooltip; the command name stays English.
+- **语义化可用状态 / Semantic availability（v0.4.3）**: 刚完成换窗（新窗口暂无可归档历史）、会话全新无历史、或压缩槽位被其它引擎持有时，按钮**自动置灰不可点**（悬停不再发光、点击无效）；发送下一条真实消息后自动恢复——与命令回执的「当前对话还没有可归档的历史」同一判定口径。判定由 host 半区经同源 webServer 暴露的 `GET /dsh-smart-compact/state?sessionId=…` 提供（只回窗口号 + 可归档布尔，**不含任何会话内容**；注册随插件 fiber 注销，卸载即净）。状态不可达（路由缺失/拉取失败）时按钮回退为**始终可点**（fail-open），点击行为交给命令回执兜底。
+- **无新增工具注册 / No new tool registrations**: 按钮不加工具、不改命令面；除上述只读状态路由外，客户端仅依赖官方 slots 服务。
 - **重生成纹理 / Regenerating the texture**: dsh-image-gen 生成（image-prompt `brand-identity-package` 模板，金色系、纯黑底）→ sips 裁 700→128 JPEG → 内联 `src/client/assets.ts`，按钮内以 `mix-blend-mode: screen` 叠加（黑底自动消失）。The texture is screen-blended, so its black floor vanishes into the plate.
 
 ## How rollover works 换窗原理（说人话）
@@ -90,11 +91,12 @@ Uninstall removes every tool, listener, and engine with the plugin fiber; notes 
 
 ## Verification status 验证声明
 
-- Vitest 80 项单元测试（客户端回归：按钮点击流「写入命令→提交→草稿恢复」三段调用序 + 渲染结构与无 session 时 inert）：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离（`vitest.config.ts` 给整轮测试一个临时 home——此前跑测试会把真实 `engine-state.json` 覆盖成合成数据，已实测复现并修掉）、pruner 隔离接线与自检、非 Error 抛出/中止信号/预算记账、手动路径探针记账与回执文案等回归用例。
-- **客户端装配实证（v0.4.2）**：lib/client.js 经 tsdown 构建（26.6 kB，含内联金色涡流纹理），宿主 client-modules 表已注册（client check: lib/client.js）；boot-check.sh 冷启动三故障静态检测全绿 + --dump-config 组合复检通过；注入器自检 8/8 PASS；正圆数值证明：敌意覆盖下 26.00×26.00 / radius 999px / clip-path circle(50%)。
+- Vitest 95 项单元测试（客户端回归：按钮点击流「写入命令→提交→草稿恢复」三段调用序 + 渲染结构与无 session 时 inert + 语义可用判定 `isInert` 的 fail-open/换窗后置灰/槽位被占置灰 + 状态 tooltip 文案；host 侧 `windowAvailability` 七种日志形态）：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离（`vitest.config.ts` 给整轮测试一个临时 home——此前跑测试会把真实 `engine-state.json` 覆盖成合成数据，已实测复现并修掉）、pruner 隔离接线与自检、非 Error 抛出/中止信号/预算记账、手动路径探针记账与回执文案等回归用例。
+- **客户端装配实证（v0.4.3）**：lib/client.js 经 tsdown 构建（30.95 kB，含内联金色涡流纹理），宿主 client-modules 表已注册（client check: lib/client.js）；boot-check.sh 冷启动三故障静态检测全绿 + --dump-config 组合复检通过；注入器自检 8/8 PASS；正圆数值证明：敌意覆盖下 26.00×26.00 / radius 999px / clip-path circle(50%)。
 - **端到端实证（staging 隔离，真实模型 glm-5.3-flash）**：模型依次调用 `get_context_remaining` → `ctx_notes`（写交接笔记）→ `new_context` → `ctx_history` 全链路成功；`new_context` 触发真实 rollover（`rolloverCount: 1`），`ctx_history` 回读到已归档窗口（window #1, ~5965 tokens archived）。
 - 隔离 staging 环境通过 `dsh --dump-config` 组合预检 + 真 boot 后才允许转正；运行模式用 `engine-state.json` 探针可查。
 - **真机换窗实证（本机真实会话）**：`new_context` → 换窗提交（`rolloverCount: 1`、`lastRolloverTrigger: new_context`、`lastRolloverRefusedReason: null`）→ 窗口 #1 全量归档（393 events / ~307k tokens）→ 新窗口 handoff 头为 `Context window #2 opened` → 跨窗 `ctx_history search` 命中 23 条；主 home `boot-check.sh` 冷启动三故障静态检测全绿。
+- **状态路由实机实证（v0.4.3）**：`GET /dsh-smart-compact/state` 对活跃会话回 `{ok:true, engineMounted:true, windowNo:2, archivable:true}`（换窗后窗口 #2 且有新对话 → 可点），对新会话回 `{windowNo:1, archivable:false}`（无可归档 → 按钮 inert）；客户端经页面 fetch 拦截确认以会话真实 id 每 4s 轮询；缺失 sessionId → 400，非 GET → 405，冷会话 → `no-live-agent`（客户端 fail-open 保持可点）。注意：宿主 submit 平面在智能体运行期间拒绝提交（locked/busy refuse），因此运行中点击按钮为静默无操作，属宿主既定语义。
 - 0.3.0 的适配依据：宿主 0.1.5-rc.1 的 `Session` 已移除 `events`，插件改经 `snapshotEvents()` 读取；自带的 0.1.5-rc.2 与宿主 rc.1 的运行时 `lib/` 经 `diff -rq` 校验逐字节相同。
 
 ## License
