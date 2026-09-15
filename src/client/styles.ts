@@ -24,7 +24,12 @@ export const STYLE_ATTR = 'dsh-smart-compact'
 
 export const css = [
   // Plate: bright blue→indigo circle — sibling of the send key, own hue.
-  `.dsc-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:none;width:31px;height:31px;padding:0;border-radius:999px;cursor:pointer;border:1px solid rgba(255,255,255,.28);background:linear-gradient(150deg,#5b93ff 0%,#3566f2 52%,#5b48f0 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 -8px 14px rgba(20,24,80,.35),0 1px 5px rgba(20,40,140,.35);transition:transform .18s ease,box-shadow .25s ease,-webkit-filter .25s ease,filter .25s ease;-webkit-user-select:none;user-select:none}`,
+
+  // Geometry carries !important plus a button qualifier on purpose: the host's
+  // composer-row button styles (normal-specificity radius and padding rules)
+  // squash the plate into a rounded rectangle. Identity geometry is not
+  // negotiable; everything else stays overridable.
+  `button.dsc-btn{position:relative !important;display:inline-flex !important;align-items:center !important;justify-content:center !important;flex:none !important;width:31px !important;height:31px !important;min-width:31px !important;max-width:31px !important;min-height:31px !important;max-height:31px !important;aspect-ratio:1/1;padding:0 !important;border-radius:999px !important;cursor:pointer;border:1px solid rgba(255,255,255,.28);background:linear-gradient(150deg,#5b93ff 0%,#3566f2 52%,#5b48f0 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.35),inset 0 -8px 14px rgba(20,24,80,.35),0 1px 5px rgba(20,40,140,.35);transition:transform .18s ease,box-shadow .25s ease,-webkit-filter .25s ease,filter .25s ease;-webkit-user-select:none;user-select:none}`,
   `.dsc-btn:hover{-webkit-filter:brightness(1.08);filter:brightness(1.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.4),inset 0 -8px 14px rgba(20,24,80,.3),0 0 18px rgba(90,130,255,.5),0 1px 6px rgba(20,40,140,.4)}`,
   `.dsc-btn:active{transform:scale(.92)}`,
   `.dsc-btn:focus-visible{outline:2px solid rgba(110,140,255,.8);outline-offset:2px}`,
