@@ -32,7 +32,7 @@ Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 
 |---|---|
 | `/smart-compact` | **100% 触发无缝换窗**：立即开一张新窗口，旧窗口内容无损归档（零模型调用），任务连续性由 ctx_notes + ctx_history 保证。槽位被其它压缩引擎占用时该命令会明确报错（fail loud），绝不静默降级为摘要压缩。回执为人读中文：成功带 ✅ 前缀 + 新窗口号 + 归档量（首行短、防 GUI 截断），点击卡片可展开全文（含换窗后剩余预算）；失败/异常带 ❌ 前缀。**交接锚点诚实化（v0.3.2）**：换窗前若本会话从未写过 ctx_notes，新窗口锚点自动降级为「ctx_history 召回」模式（不再指向空笔记），回执同步给出 ⚠️ 提示——建议重要任务在换窗前先写笔记。 |
 
-## Composer button 一键换窗按钮（v0.4.4）
+## Composer button 一键换窗按钮（v0.4.5）
 
 输入框工具行**发送键左侧、上下文消耗表右侧**固定一枚 **26px 正圆按钮**（琥珀金涡流 + 暗铜渐变盘），点击等同执行 `/smart-compact`——它把命令写入输入框并走宿主**原生提交通道**（与手动键入后回车完全同一条路径：adjudication → 执行 → 回执渲染全部由宿主负责）。
 
@@ -42,7 +42,7 @@ The composer tool row carries a **26px perfect-circle button** (amber-gold vorte
 - **草稿保护 / Draft safety**: 点击时未发送文字自动保存、命令捕获后原样恢复（对照宿主 input machine 源码：bare-token 清空仅在草稿恰等于命令时发生）。Unsent text is restored verbatim after the command is captured.
 - **动效 / Motion**: 悬停光环 + 涡流加速旋转；点击金色冲击波 + 涡流快滚；遵循 `prefers-reduced-motion`。Hover glow with a faster vortex spin; click fires a gold burst and a fast roll; honors `prefers-reduced-motion`.
 - **悬停提示 / Tooltip**: 精简汉语（命令名保留英文），并随状态变化——可点时「一键换窗 = /smart-compact（归档本窗口、开新窗，草稿保留）」；刚换完窗时「窗口 #N 刚开、暂无可归档历史；发送下一条消息后可再次换窗」；槽位被占时「换窗不可用：压缩槽位由 XX 持有」。State-aware Chinese tooltip; the command name stays English.
-- **语义化可用状态 / Semantic availability（v0.4.4）**: 刚完成换窗（新窗口内容太少）、会话全新无历史、或压缩槽位被其它引擎持有时，按钮**自动置灰不可点**（悬停不再发光、点击无效）；内容积攒够后自动恢复——判定与压缩引擎**同一条不等式**：交接检查点必须严格小于待归档内容（用宿主同一 token meter 对 surface 逐节点计价），否则引擎会以「summary is not smaller than the shadowed content」拒执（v0.4.3 曾在 dsh-android-pane 会话实测出 3 连红色无效回执，本版闭环）。判定由 host 半区经同源 webServer 暴露的 `GET /dsh-smart-compact/state?sessionId=…` 提供（只回窗口号 + 可归档布尔，**不含任何会话内容**；注册随插件 fiber 注销，卸载即净）。状态不可达（路由缺失/拉取失败）时按钮回退为**始终可点**（fail-open），点击行为交给命令回执兜底。
+- **语义化可用状态 / Semantic availability（v0.4.5）**: 刚完成换窗（新窗口内容太少）、会话全新无历史、或压缩槽位被其它引擎持有时，按钮**自动置灰不可点**（悬停不再发光、点击无效）；内容积攒够后自动恢复。判定与压缩引擎**同一条不等式**：手动换窗的归档区间（retain=0，且**永不收纳最新一个 surface 节点**）的宿主 meter 计价必须严格大于交接检查点估价，否则引擎会以「summary is not smaller than the shadowed content」拒执（v0.4.3 曾在 dsh-android-pane 会话实测出 3 连红色无效回执：`215 ≥ 193`，本版闭环——按钮在该状态直接置灰，回执也改为带数字的诚实文案）。判定由 host 半区经同源 webServer 暴露的 `GET /dsh-smart-compact/state?sessionId=…` 提供（只回窗口号 + 可归档布尔，**不含任何会话内容**；注册随插件 fiber 注销，卸载即净）。状态不可达（路由缺失/拉取失败）时按钮回退为**始终可点**（fail-open），点击行为交给命令回执兜底。
 - **无新增工具注册 / No new tool registrations**: 按钮不加工具、不改命令面；除上述只读状态路由外，客户端仅依赖官方 slots 服务。
 - **重生成纹理 / Regenerating the texture**: dsh-image-gen 生成（image-prompt `brand-identity-package` 模板，金色系、纯黑底）→ sips 裁 700→128 JPEG → 内联 `src/client/assets.ts`，按钮内以 `mix-blend-mode: screen` 叠加（黑底自动消失）。The texture is screen-blended, so its black floor vanishes into the plate.
 

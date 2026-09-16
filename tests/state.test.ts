@@ -35,8 +35,11 @@ describe('windowAvailability (metered — the engine\'s own comparison)', () => 
 
   it('fresh session with real mass above the framed checkpoint: archivable', () => {
     const events = [userEvent(0, '你好'), modelEvent(1, '你好！有什么可以帮你？')]
+    // The range excludes the newest node (retain-last rule): [user] = 400 > FRAMED.
     const nodes = [node(0, 400), node(1, 400)]
     expect(windowAvailability(events, nodes, FRAMED)).toEqual({ windowNo: 1, archivable: true })
+    // A single priced node → empty range (nothing shadowable) → inert.
+    expect(windowAvailability(events, [node(0, 400)], FRAMED).archivable).toBe(false)
   })
 
   it('right after a rollover the live surface is the old checkpoint itself — NOT archivable', () => {
@@ -55,27 +58,37 @@ describe('windowAvailability (metered — the engine\'s own comparison)', () => 
     expect(windowAvailability(events, nodes, FRAMED)).toEqual({ windowNo: 2, archivable: false })
   })
 
-  it('the next real exchange after a rollover re-arms the button', () => {
+  it('one new exchange re-arms, but a single new message does not (retain-last rule)', () => {
+    // Manual range = first non-system node .. length-2: the newest surface
+    // node is always retained. After the rollover the surface is [checkpoint,
+    // msg]: range = [checkpoint] ≈ template size → the engine refuses → inert.
+    // A second exchange extends the range past the checkpoint → re-armed.
     const events = [
       userEvent(0, '旧窗口的问题'),
       rolloverSummary(1, [0]),
       userEvent(2, '[smart-compact rollover] Context window #2 opened. ...'),
       userEvent(3, '新窗口的第一条消息'),
+      modelEvent(4, '新窗口的回答'),
     ]
-    const nodes = [node(0, 8000), node(2, 230), node(3, 600)]
+    const nodes = [node(2, 230), node(3, 600), node(4, 700)]
+    // range = [checkpoint, first message] = 830 > FRAMED → archivable.
     expect(windowAvailability(events, nodes, FRAMED)).toEqual({ windowNo: 2, archivable: true })
+    // One message only: range = [checkpoint] = 230 ≤ FRAMED → inert.
+    expect(windowAvailability(events, nodes.slice(0, 2), FRAMED).archivable).toBe(false)
   })
 
   it('a leading system message is never part of the range (node 0 head)', () => {
     const events = [
       { seq: 0, type: 'system/message', data: { content: [{ type: 'text', text: 'sys' }] } },
-      userEvent(1, '真实内容'),
+      userEvent(1, '真实内容一'),
+      modelEvent(2, '真实内容二'),
     ]
-    const nodes = [node(0, 900), node(1, 260)]
-    // Only the user message is shadowable; 260 > FRAMED(250) → archivable.
-    expect(windowAvailability(events, nodes, FRAMED).archivable).toBe(true)
+    // keepFromIdx=1 ≤ firstIdx=1 → empty range → inert…
+    expect(windowAvailability(events, [node(0, 900), node(1, 260)], FRAMED).archivable).toBe(false)
+    // …with one more node the range = [user] only; 260 > FRAMED(250) → archivable.
+    expect(windowAvailability(events, [node(0, 900), node(1, 260), node(2, 300)], FRAMED).archivable).toBe(true)
     // …and just below the bar → inert.
-    expect(windowAvailability(events, [node(0, 900), node(1, 240)], FRAMED).archivable).toBe(false)
+    expect(windowAvailability(events, [node(0, 900), node(1, 240), node(2, 300)], FRAMED).archivable).toBe(false)
   })
 
   it('several rollovers: live window number counts every compaction/summary', () => {
@@ -86,8 +99,9 @@ describe('windowAvailability (metered — the engine\'s own comparison)', () => 
       rolloverSummary(3, [2]),
       userEvent(4, 'w3-a'),
     ]
-    const nodes = [node(2, 230), node(4, 900)]
-    // two completed rollovers → live window is #3 (same numbering ctx_history prints)
+    // surface only; range excludes the newest node: [w2-a] = 230… use enough mass
+    const nodes = [node(2, 300), node(4, 900)]
+    // two completed rollovers → live window is #3 (same numbering ctx_history prints); range = [w2-a] = 300 > FRAMED
     expect(windowAvailability(events, nodes, FRAMED)).toEqual({ windowNo: 3, archivable: true })
   })
 

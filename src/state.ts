@@ -63,12 +63,15 @@ export function framedCheckpointTokenEstimate(estimateMessage?: (message: unknow
 
 /**
  * Compute button availability from the durable event stream plus the SAME
- * priced surface measurement the engine's manual path selects with. With
- * retain=0 the shadowed range is the priced nodes from the first non-system
- * node to the end; a click is useful exactly when that mass exceeds the
- * framed checkpoint estimate (the engine refuses at >=). A null measurement
- * (meter unavailable) degrades to the old text-presence heuristic, which
- * fails open.
+ * priced surface measurement the engine's manual path selects with. The
+ * manual path selects retain=0, and its range ALWAYS ends one node short of
+ * the newest surface node (selectCompactableRange's keepFromIdx lands on the
+ * last index, then ends at keepFromIdx-1) — the newest message is never
+ * shadowed. A click is useful exactly when that range's token mass exceeds
+ * the framed checkpoint estimate (the engine refuses at >=; observed live:
+ * "215 estimated framed tokens >= 193" → three red no-op receipts). A null
+ * measurement (meter unavailable) degrades to the old text-presence
+ * heuristic, which fails open.
  */
 export function windowAvailability(
   events: readonly SessionEventLike[],
@@ -85,9 +88,12 @@ export function windowAvailability(
   const bySeq = new Map(events.map((e) => [e.seq, e]))
   const headEvent = bySeq.get(pricedNodes[0].seq)
   const firstIdx = headEvent !== undefined && headEvent.type === 'system/message' ? 1 : 0
-  if (pricedNodes.length <= firstIdx) return { windowNo, archivable: false }
+  // keepFromIdx = last index (retain=0 admits it at once); the range ends at
+  // keepFromIdx-1, so fewer than two priced nodes after the system head means
+  // an empty range → the engine returns null ("no archiveable history").
+  if (pricedNodes.length - 1 <= firstIdx) return { windowNo, archivable: false }
   let shadowedRouteTokens = 0
-  for (let index = firstIdx; index < pricedNodes.length; index += 1) shadowedRouteTokens += pricedNodes[index].tokens
+  for (let index = firstIdx; index < pricedNodes.length - 1; index += 1) shadowedRouteTokens += pricedNodes[index].tokens
   return { windowNo, archivable: shadowedRouteTokens > framedTemplateTokens }
 }
 
