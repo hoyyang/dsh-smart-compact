@@ -102,6 +102,21 @@ describe('/smart-compact — 100% lossless window switch', () => {
     expect((await executeSmartCompact(cancelled, { ...invocation(), signal: signal.signal })).text).toContain('已取消')
   })
 
+  it('translates the size-invariant refusal (fresh window, template >= content) into honest guidance', async () => {
+    // The exact diagnostic the engine emits on a just-rolled window (observed
+    // live on dsh-android-pane 建设: three red no-op receipts at ~1% content).
+    const cause = new Error('summary is not smaller than the shadowed content (215 estimated framed tokens >= 193)')
+    const tiny = makeDeps({ engine: { compactNow: vi.fn(async () => { throw new ManualCompactionError('summary', 'manual compaction could not produce a smaller summary', { cause }) }) } })
+    const text = (await executeSmartCompact(tiny, invocation())).text
+    expect(text).toContain('内容太少')
+    expect(text).toContain('215')
+    expect(text).toContain('193')
+    expect(text).toContain('对话未被改动')
+    // A summary failure WITHOUT the pricing cause keeps the generic wording.
+    const generic = makeDeps({ engine: { compactNow: vi.fn(async () => { throw new ManualCompactionError('summary', 'manual compaction could not produce a smaller summary') }) } })
+    expect((await executeSmartCompact(generic, invocation())).text).toContain('无法生成交接检查点')
+  })
+
   it('register wires the command and disposes in-flight handlers', async () => {
     const registered: Array<Record<string, unknown>> = []
     const effects: Array<() => void> = []

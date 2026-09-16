@@ -69,7 +69,24 @@ export function expectedFailure(error: ManualCompactionError): CommandOutcome {
     case 'busy': return { kind: 'error', text: '❌ 未执行换窗：智能体正忙（任务运行中）。等当前任务结束或停止后重试。' }
     case 'cancelled': return { kind: 'error', text: '❌ 换窗已取消。' }
     case 'changed': return { kind: 'error', text: '❌ 未执行换窗：待压缩的历史在替换前发生了变化。对话未被改动；本次尝试已记入会话日志。' }
-    case 'summary': return { kind: 'error', text: '❌ 未执行换窗：无法生成交接检查点。对话未被改动；本次尝试已记入会话日志。' }
+    case 'summary': {
+      // This engine's only summary-stage failure is the size invariant: the
+      // fixed handoff checkpoint must price strictly smaller than the shadowed
+      // content, so a freshly-rolled window (too little new content) refuses
+      // here. Surface THAT cause instead of the generic wording — the numbers
+      // come from the engine's own diagnostic (cause.message).
+      const cause = (error as { cause?: { message?: unknown } }).cause
+      const match = typeof cause?.message === 'string'
+        ? /not smaller than the shadowed content \((\d+) estimated framed tokens >= (\d+)\)/.exec(cause.message)
+        : null
+      if (match !== null) {
+        return {
+          kind: 'error',
+          text: `❌ 未执行换窗：当前窗口内容太少（交接检查点约 ${formatTokens(Number(match[1]))} tok，待归档仅 ${formatTokens(Number(match[2]))} tok）。多发几条消息后再换窗；对话未被改动。`,
+        }
+      }
+      return { kind: 'error', text: '❌ 未执行换窗：无法生成交接检查点。对话未被改动；本次尝试已记入会话日志。' }
+    }
     case 'commit': return { kind: 'error', text: '❌ 换窗未干净完成：部分会话历史可能已变化。请先检查当前会话状态再重试。' }
     case 'persistence': return { kind: 'error', text: '❌ 换窗已完成，但会话保存失败。' }
     default: return { kind: 'error', text: `❌ 换窗失败：${String((error as Error).message ?? error)}` }

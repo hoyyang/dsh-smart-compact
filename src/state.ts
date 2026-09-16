@@ -1,41 +1,94 @@
 /**
- * Button availability state — "would a click right now do anything?"
+ * Button availability state — "would a click right now actually commit?"
  *
- * The composer button's disabled state is semantic, not cosmetic: a click is
- * useful exactly when the live window still holds archivable (non-handoff)
- * conversation content. Right after a rollover the fresh window contains only
- * the handoff checkpoint, so the button goes inert until the next real
- * exchange lands. The client half reads this through one exact HTTP route
- * served by the host half over the profile's own loopback web server; the
- * payload carries window counters only — never conversation content.
+ * The composer button's disabled state is semantic, not cosmetic. The engine's
+ * own invariant (dsh-compaction-basic) is: the framed handoff checkpoint must
+ * price STRICTLY SMALLER than the shadowed content — otherwise the transaction
+ * aborts with "summary is not smaller than the shadowed content" and the user
+ * sees a red no-op receipt (observed on a freshly rolled window: the fixed
+ * template priced >= the few tokens of new content). The probe therefore
+ * mirrors that exact comparison using the same token meter the engine uses,
+ * plus the same retain=0 range the manual path selects. The client half reads
+ * the verdict through one exact HTTP route served over the profile's loopback
+ * web server; the payload carries window counters only — never content.
  *
  * @module dsh-smart-compact/state
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { SessionArchiveReader, eventText, sessionEvents, type SessionEventLike, type SessionLogLike } from './history.js'
+import { handoffCheckpointText } from './rollover.js'
 
 export interface WindowAvailability {
   /** Live window number (windows start at #1; ctx_history's "live window" numbering). */
   windowNo: number
-  /** Whether a /smart-compact click right now has anything to archive. */
+  /** Whether a /smart-compact click right now has anything useful to archive. */
   archivable: boolean
 }
 
+/** Priced surface node as produced by the token meter's measure(). */
+export interface PricedNodeLike {
+  seq: number
+  tokens: number
+}
+
 /**
- * Compute button availability from a session's durable event stream — the
- * same "nothing to switch" condition the command receipt reports as
- * "当前对话还没有可归档的历史": the live window's events are everything not
- * shadowed by a completed rollover and not compaction bookkeeping, and a
- * click is useful only when at least one of them projects to real text.
+ * The framed-checkpoint token cost, estimated once: the checkpoint is a user
+ * message with three text blocks (preamble+open tag, our fixed handoff
+ * template, close tag) priced by the host meter, plus a safety margin so the
+ * probe errs toward "inert" — a wrongly enabled click buys a red receipt,
+ * a wrongly disabled click costs nothing (the command stays available).
  */
-export function windowAvailability(events: readonly SessionEventLike[]): WindowAvailability {
-  const windows = new SessionArchiveReader(events, 0).listWindows()
-  const archived = new Set(windows.flatMap((w) => w.shadowedSeqs))
-  const live = events.filter((e) => !e.type.startsWith('compaction/') && !archived.has(e.seq))
-  return {
-    windowNo: windows.length + 1,
-    archivable: live.some((e) => eventText(e) !== ''),
+export function framedCheckpointTokenEstimate(estimateMessage?: (message: unknown) => number): number {
+  // Longest template variant (the no-notes wording) at a late window number.
+  const template = handoffCheckpointText(98, false)
+  const blocks = [
+    { type: 'text', text: 'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context.\n\n<compacted-summary>' },
+    { type: 'text', text: template },
+    { type: 'text', text: '</compacted-summary>' },
+  ]
+  let base: number
+  if (typeof estimateMessage === 'function') {
+    try {
+      base = estimateMessage({ role: 'user', content: blocks })
+    } catch {
+      base = Math.ceil(template.length / 4)
+    }
+  } else {
+    base = Math.ceil(template.length / 4)
   }
+  // Margin covers host framing drift and keeps the comparison strictly biased
+  // toward refusing a useless click.
+  return base + 48
+}
+
+/**
+ * Compute button availability from the durable event stream plus the SAME
+ * priced surface measurement the engine's manual path selects with. With
+ * retain=0 the shadowed range is the priced nodes from the first non-system
+ * node to the end; a click is useful exactly when that mass exceeds the
+ * framed checkpoint estimate (the engine refuses at >=). A null measurement
+ * (meter unavailable) degrades to the old text-presence heuristic, which
+ * fails open.
+ */
+export function windowAvailability(
+  events: readonly SessionEventLike[],
+  pricedNodes: readonly PricedNodeLike[] | null,
+  framedTemplateTokens: number = framedCheckpointTokenEstimate(),
+): WindowAvailability {
+  const windows = new SessionArchiveReader(events, 0).listWindows()
+  const windowNo = windows.length + 1
+  if (pricedNodes === null || pricedNodes.length === 0) {
+    const archived = new Set(windows.flatMap((w) => w.shadowedSeqs))
+    const live = events.filter((e) => !e.type.startsWith('compaction/') && !archived.has(e.seq))
+    return { windowNo, archivable: live.some((e) => eventText(e) !== '') }
+  }
+  const bySeq = new Map(events.map((e) => [e.seq, e]))
+  const headEvent = bySeq.get(pricedNodes[0].seq)
+  const firstIdx = headEvent !== undefined && headEvent.type === 'system/message' ? 1 : 0
+  if (pricedNodes.length <= firstIdx) return { windowNo, archivable: false }
+  let shadowedRouteTokens = 0
+  for (let index = firstIdx; index < pricedNodes.length; index += 1) shadowedRouteTokens += pricedNodes[index].tokens
+  return { windowNo, archivable: shadowedRouteTokens > framedTemplateTokens }
 }
 
 /** Narrow face of the profile web server the route registers against. */
@@ -59,11 +112,15 @@ interface AgentsFace {
   get(id: string): { session?: unknown } | undefined
 }
 
+interface TokenMeterFace {
+  measure(session: unknown): { nodes?: readonly PricedNodeLike[] }
+  estimateMessage?(message: unknown): number
+}
+
 interface StateContext {
   webServer?: WebServerFace
   agents?: AgentsFace
-  /** Scope-chain service resolution (returns undefined for absent services). */
-  get?(name: string): unknown
+  tokenMeter?: TokenMeterFace
 }
 
 /** The one route path; the client fetches it same-origin. */
@@ -96,6 +153,7 @@ export function registerStateRoute(ctx: object, deps: StateRouteDeps): void {
     return
   }
   const agents = (ctx as StateContext).agents
+  const tokenMeter = (ctx as StateContext).tokenMeter
   const respond = (res: ServerResponse, code: number, body: unknown): void => {
     res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
     res.end(JSON.stringify(body))
@@ -123,7 +181,16 @@ export function registerStateRoute(ctx: object, deps: StateRouteDeps): void {
       return
     }
     try {
-      const { windowNo, archivable } = windowAvailability(sessionEvents(agent.session as SessionLogLike))
+      const events = sessionEvents(agent.session as SessionLogLike)
+      let pricedNodes: readonly PricedNodeLike[] | null = null
+      try {
+        // Same meter instance the engine's manual path prices with.
+        pricedNodes = tokenMeter?.measure(agent.session)?.nodes ?? null
+      } catch {
+        pricedNodes = null
+      }
+      const framed = framedCheckpointTokenEstimate(tokenMeter?.estimateMessage?.bind(tokenMeter))
+      const { windowNo, archivable } = windowAvailability(events, pricedNodes, framed)
       respond(res, 200, { ok: true, engineMounted: true, windowNo, archivable })
     } catch (error) {
       respond(res, 200, { ok: false, reason: 'events-unavailable', detail: error instanceof Error ? error.message : String(error) })

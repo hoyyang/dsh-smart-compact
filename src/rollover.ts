@@ -61,6 +61,29 @@ function openedWindowNumber(generation: number): number {
 }
 
 const ROLLOVER_TEMPLATE_MARKER = '[smart-compact rollover]'
+
+/**
+ * The fixed handoff checkpoint text for one window switch, factored out so the
+ * availability probe (src/state.ts) can price the SAME bytes the engine would
+ * write: the compaction transaction refuses to run when the framed checkpoint
+ * does not price strictly smaller than the shadowed content, so "is a click
+ * useful" is a token-mass comparison against exactly this text.
+ */
+export function handoffCheckpointText(generation: number, notesAssured: boolean): string {
+  const notesLine = notesAssured
+    ? 'Handoff: current goal, decisions, and next steps live in ctx_notes (read it first).'
+    : 'Handoff: no ctx_notes were written in the previous window — there is nothing to read there.'
+  const carryLine = notesAssured
+    ? "Continue the user's task from the notes; do not assume anything not written there."
+    : "Continue the user's task; reconstruct any missing context via ctx_history before assuming it."
+  return [
+    `${ROLLOVER_TEMPLATE_MARKER} Context window #${openedWindowNumber(generation)} opened.`,
+    'The previous window was archived in full — no content was summarized or lost.',
+    notesLine,
+    'Missing details: ctx_history search/read recalls exact original events on demand.',
+    carryLine,
+  ].join(' ')
+}
 /** Consecutive budget-measurement failures before the degraded signal fires. */
 const BUDGET_DEGRADED_AFTER = 5
 
@@ -178,17 +201,7 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     // an empty channel — say so and route reconstruction to ctx_history.
     const sessionId = typeof (agent.session as { id?: unknown }).id === 'string' ? (agent.session as { id: string }).id : null
     const notesAssured = sessionId === null || (await this.notesPresent(sessionId))
-    const [notesLine, carryLine] = notesAssured
-      ? ['Handoff: current goal, decisions, and next steps live in ctx_notes (read it first).', "Continue the user's task from the notes; do not assume anything not written there."]
-      : ['Handoff: no ctx_notes were written in the previous window — there is nothing to read there.', "Continue the user's task; reconstruct any missing context via ctx_history before assuming it."]
-    const text = [
-      `${ROLLOVER_TEMPLATE_MARKER} Context window #${openedWindowNumber(generation)} opened.`,
-      'The previous window was archived in full — no content was summarized or lost.',
-      notesLine,
-      'Missing details: ctx_history search/read recalls exact original events on demand.',
-      carryLine,
-    ].join(' ')
-    const summary: ContentBlock[] = [{ type: 'text', text }]
+    const summary: ContentBlock[] = [{ type: 'text', text: handoffCheckpointText(generation, notesAssured) }]
     return {
       summary,
       provider: 'rollover-template',
