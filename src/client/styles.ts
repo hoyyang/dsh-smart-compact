@@ -34,7 +34,7 @@ export const css = [
   `.dsc-btn:hover{-webkit-filter:brightness(1.1);filter:brightness(1.1);box-shadow:inset 0 1px 0 rgba(255,230,170,.45),inset 0 -8px 14px rgba(30,18,2,.45),0 0 18px rgba(255,180,60,.5),0 1px 6px rgba(60,35,0,.5)}`,
   `.dsc-btn:active{transform:scale(.92)}`,
   `.dsc-btn:focus-visible{outline:2px solid rgba(255,190,80,.85);outline-offset:2px}`,
-  `.dsc-btn[data-inert='true']{opacity:.45;cursor:default}`,
+  `.dsc-btn[data-inert='true']{opacity:.45;cursor:default !important}`,
   // Inert must read as inert: no hover glow, no hover brightening, no vortex
   // speed-up, no press scale — a disabled-looking plate stays motionless.
   `.dsc-btn[data-inert='true']:hover{-webkit-filter:none;filter:none;box-shadow:inset 0 1px 0 rgba(255,230,170,.4),inset 0 -8px 14px rgba(30,18,2,.5),0 1px 5px rgba(60,35,0,.45)}`,
