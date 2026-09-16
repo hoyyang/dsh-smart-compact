@@ -9,7 +9,7 @@ interface Harness {
   assemble(session: object | undefined, assembled?: Record<string, unknown>): Promise<Record<string, unknown>>
 }
 
-function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts?: { fallbackBufferTokens?: number; thresholdRatio?: number; getWindowGeneration?: () => number }): Harness {
+function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts?: { fallbackBufferTokens?: number; thresholdRatio?: number; getWindowGeneration?: () => number; onObservation?: (observation: unknown) => void }): Harness {
   const listeners = new Map<string, Array<(...args: unknown[]) => unknown>>()
   const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
   attachReminder(
@@ -19,6 +19,7 @@ function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts
       thresholdRatio: opts?.thresholdRatio ?? 0.85,
       getBudget: async (session: object) => (session ? (typeof budgetSource === 'function' ? budgetSource() : budgetSource) : null),
       getWindowGeneration: opts?.getWindowGeneration ?? (() => 0),
+      onObservation: opts?.onObservation,
       logger,
       pluginName: 'dsh-smart-compact',
     },
@@ -112,5 +113,43 @@ describe('nudge text contracts', () => {
     expect(TIERS.map((t) => t.label)).toEqual(['25%', '50%', '75%'])
     expect(tierNudge(0.25, '25%')).toContain('25%')
     expect(graceNudge(500)).toContain('500 tokens remaining')
+  })
+})
+
+describe('attachReminder — pass observability (v0.5.0)', () => {
+  it('emits briefed/tier/grace observations as nudges fire', async () => {
+    const seen: Array<{ kind: string; label?: string }> = []
+    let total = 95_000
+    const h = makeHarness(() => budget(total), {
+      fallbackBufferTokens: 2_000,
+      thresholdRatio: 0.85,
+      onObservation: (o) => seen.push(o as { kind: string; label?: string }),
+    })
+    await h.assemble(session)
+    total = 30_000
+    await h.assemble(session)
+    total = 99_000
+    await h.assemble(session)
+    expect(seen.some((o) => o.kind === 'briefed')).toBe(true)
+    expect(seen.some((o) => o.kind === 'tier' && o.label === '25%')).toBe(true)
+    expect(seen.some((o) => o.kind === 'grace')).toBe(true)
+  })
+
+  it('reports no-budget once per session instead of skipping silently', async () => {
+    const seen: Array<{ kind: string }> = []
+    const h = makeHarness(() => budget(0).contextWindow ? budget(0) : budget(0), {
+      onObservation: (o) => seen.push(o as { kind: string }),
+    })
+    // getBudget returning null path: harness maps null only for undefined session;
+    // simulate the failure shape via a zero window instead.
+    void h
+    const seen2: Array<{ kind: string }> = []
+    const h2 = makeHarness(() => ({ totalTokens: 0, contextWindow: 0, remaining: 0, baselineKind: 'estimated' }), {
+      onObservation: (o) => seen2.push(o as { kind: string }),
+    })
+    await h2.assemble(session)
+    await h2.assemble(session)
+    expect(seen2.filter((o) => o.kind === 'no-budget').length).toBe(1)
+    expect(seen.filter((o) => o.kind === 'no-budget').length).toBe(0)
   })
 })

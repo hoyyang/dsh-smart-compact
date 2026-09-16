@@ -24,6 +24,14 @@ interface AssembledLike {
   [key: string]: unknown
 }
 
+/** One reminder-pass outcome, surfaced into engine-state by the host wiring. */
+export type ReminderObservation =
+  | { kind: 'briefed' }
+  | { kind: 'tier'; label: string }
+  | { kind: 'grace' }
+  | { kind: 'no-budget' }
+  | { kind: 'pass-failed'; reason: string }
+
 export interface ReminderDeps {
   /** Grace-band width in tokens; belt-and-braces floor for the grace reminder. */
   fallbackBufferTokens: number
@@ -41,6 +49,14 @@ export interface ReminderDeps {
   getWindowGeneration(session: object): number
   logger: { info(msg: string): void; warn(msg: string): void; debug(msg: string): void }
   pluginName: string
+  /**
+   * Optional observability sink: every reminder-pass outcome lands here so
+   * engine-state can show whether nudges actually reach the model. The
+   * 2026-09-16 billing-session incident (a hot session fell through to the
+   * host's LLM summarizer with zero reminders ever delivered) was invisible
+   * precisely because this pass had no counters.
+   */
+  onObservation?: (observation: ReminderObservation) => void
 }
 
 /** Consumption tiers as fractions of the context window (Codex-style). */
@@ -78,6 +94,14 @@ export function attachReminder(
   const briefed = new WeakSet<object>()
   const tiersDone = new WeakMap<object, Set<string>>()
   const graceDone = new WeakMap<object, number>()
+  const noBudgetSeen = new WeakSet<object>()
+  const observe = (observation: ReminderObservation): void => {
+    try {
+      deps.onObservation?.(observation)
+    } catch {
+      // Observability must never break the reminder pass.
+    }
+  }
 
   const appendTo = (assembled: AssembledLike, text: string): AssembledLike | null => {
     if (typeof assembled?.system === 'string') return { ...assembled, system: `${assembled.system}\n\n${text}` }
@@ -94,19 +118,27 @@ export function attachReminder(
       if (!session) return assembled
 
       const budget = await deps.getBudget(session)
-      if (!budget || budget.contextWindow <= 0) return assembled
+      if (!budget || budget.contextWindow <= 0) {
+        if (!noBudgetSeen.has(session)) {
+          noBudgetSeen.add(session)
+          observe({ kind: 'no-budget' })
+        }
+        return assembled
+      }
       const usedFraction = 1 - budget.remaining / budget.contextWindow
 
       const pieces: string[] = []
       if (!briefed.has(session)) {
         briefed.add(session)
         pieces.push(BRIEFING)
+        observe({ kind: 'briefed' })
       }
       const done = tiersDone.get(session) ?? new Set<string>()
       for (const tier of TIERS) {
         if (usedFraction >= tier.fraction && !done.has(tier.label)) {
           done.add(tier.label)
           pieces.push(tierNudge(usedFraction, tier.label))
+          observe({ kind: 'tier', label: tier.label })
         }
       }
       tiersDone.set(session, done)
@@ -123,6 +155,7 @@ export function attachReminder(
         if (graceDone.get(session) !== generation) {
           graceDone.set(session, generation)
           pieces.push(graceNudge(budget.remaining))
+          observe({ kind: 'grace' })
         }
       }
       if (pieces.length === 0) return assembled
@@ -137,6 +170,7 @@ export function attachReminder(
       deps.logger.info(text)
       return assembled
     } catch (error) {
+      observe({ kind: 'pass-failed', reason: (error as Error).message ?? String(error) })
       deps.logger.warn(`[${deps.pluginName}] reminder pass failed: ${(error as Error).message}; continuing with the unmodified prompt`)
       return assembled
     }

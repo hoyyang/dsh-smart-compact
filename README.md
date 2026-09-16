@@ -46,6 +46,26 @@ The composer tool row carries a **26px perfect-circle button** (amber-gold vorte
 - **无新增工具注册 / No new tool registrations**: 按钮不加工具、不改命令面；除上述只读状态路由外，客户端仅依赖官方 slots 服务。
 - **重生成纹理 / Regenerating the texture**: dsh-image-gen 生成（image-prompt `brand-identity-package` 模板，金色系、纯黑底）→ sips 裁 700→128 JPEG → 内联 `src/client/assets.ts`，按钮内以 `mix-blend-mode: screen` 叠加（黑底自动消失）。The texture is screen-blended, so its black floor vanishes into the plate.
 
+## Automatic rollover 自动换窗（默认开启）
+
+自动换窗不是按钮的附属品，而是一条**宿主事件驱动**的独立通路：压缩引擎注册为宿主 compaction 服务，宿主在每一步边界（`agent/pre-step`）与模型窗口超限恢复点（`context-overflow`）调用 `compactIfNeeded`，三带策略自动升级：
+
+- **quiet**（消耗 < 85%）：什么都不做；
+- **grace**（85% ~ 85%+8192 tok）：提醒一次（写 ctx_notes），继续工作；
+- **forced**（≥ 85%+8192 tok）：自动执行与手动 `/smart-compact` **完全相同**的机械换窗——零模型调用，新窗口第一条消息就是交接锚点（`Context window #N opened`），GUI 的「上下文已压缩」横幅照常渲染，但内容是无损换窗而非 AI 摘要。
+
+The automatic path is host-event-driven (`agent/pre-step` pressure check + window-overflow recovery) and escalates quiet → grace → forced rollover — all zero-model via the template summarizer override.
+
+提醒（25/50/75% + grace）经 system-prompt 瀑布注入模型上下文；其触达情况（briefing/tier/grace 计数与预算测量失败）自 v0.5.0 起写入 `engine-state.json` 的 `reminderObserved`——提醒静默失效从此可观测（0.4.x 时代曾发生过热会话零触达、最终被宿主 AI 摘要兜底的事故）。
+
+## Sanitization 强制脱敏（v0.5.0，无开关）
+
+引擎**自动生成**的文本——交接锚点的 `Task:` / `Last action:` 两行——写入新窗口前强制过一遍脱敏：手机号、邮箱、18 位证件号、中英文企业名（按后缀识别）。命中只记**数量与类别**进日志（`handoff anchors sanitized — N redaction(s)`），绝不回显原文。
+
+边界（刻意为之）：逐字归档 `ctx_history` **不脱敏**——本机会话的无损回查是产品核心契约；脱敏只覆盖引擎自动生成、会自动传播的面。测试与文档样例一律合成数据（张三 / 13800138000 / example.com / 示例公司）。
+
+Engine-authored surfaces (the orientation anchors) are mandatorily sanitized before entering a new window — phone / email / national-ID / company-name patterns, counts logged, content never echoed. The verbatim archive stays untouched on purpose (lossless local recall is the core contract).
+
 ## How rollover works 换窗原理（说人话）
 
 上下文快满（默认窗口的 85%）时不再"把旧对话压成摘要"，而是：先把旧窗口整体**原封不动存档**（本来就有的会话持久化流，零新存储）→ 留 8192 token 缓冲让模型写交接笔记 → 然后开一张干净的新窗口，窗口里只放一段固定模板（"旧窗口已完整存档，当前状态在 ctx_notes，细节用 ctx_history 查"）。全程**不调用一次摘要模型**；旧内容无损、随时可精确回读。

@@ -17,6 +17,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { measureBudget, type AgentLike, type CtxLike } from './budget.js'
 import { eventText, sessionEvents, type SessionEventLike, type SessionLogLike } from './history.js'
 import { consumeRollover, type PendingRollover } from './new-context.js'
+import { redactText } from './redact.js'
 
 type CompactionResult = NonNullable<Awaited<ReturnType<BasicCompactionEngine['compactIfNeeded']>>>
 
@@ -288,7 +289,17 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     // the availability probe prices their worst case, so the size invariant of
     // the compaction transaction is never surprised by them.
     const context = deriveHandoffContext(events)
-    const summary: ContentBlock[] = [{ type: 'text', text: buildHandoffCheckpoint(generation, notesAssured, context) }]
+    // Mandatory sanitization (v0.5.0): the anchors are engine-authored and must
+    // never carry personal/company information into the new window. The
+    // verbatim archive stays untouched — authored surfaces only. Logs carry
+    // counts and labels, never the matched content.
+    const task = redactText(context.task)
+    const last = redactText(context.last)
+    const redactionCount = task.redactions + last.redactions
+    if (redactionCount > 0) {
+      this.rolloverCfg.logger.info(`dsh-smart-compact: handoff anchors sanitized — ${redactionCount} redaction(s) [${[...new Set([...task.labels, ...last.labels])].join(', ')}]`)
+    }
+    const summary: ContentBlock[] = [{ type: 'text', text: buildHandoffCheckpoint(generation, notesAssured, { task: task.text, last: last.text }) }]
     return {
       summary,
       provider: 'rollover-template',

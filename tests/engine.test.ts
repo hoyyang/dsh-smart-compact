@@ -371,3 +371,24 @@ describe('RolloverCompactionEngine.compactNow — manual path bookkeeping', () =
     }
   })
 })
+
+describe('RolloverCompactionEngine.summarize — mandatory anchor sanitization (v0.5.0)', () => {
+  it('redacts personal and company information out of the Task/Last-action anchors', async () => {
+    const ctx = makeFakeCtx(0)
+    const { engine } = makeEngine(ctx)
+    // 合成数据：张三 / 13800138000 / example.com / 示例科技有限公司
+    const agent = makeAgent([
+      { seq: 1, type: 'session/title', data: { title: '与示例科技有限公司的合作推进' } },
+      { seq: 2, type: 'user/message', data: { content: [{ type: 'text', text: '联系 张三 13800138000 或 zhangsan@example.com 索要合同' }] } },
+    ]) as never
+    const text = (await engine.summarize({}, agent, undefined)).summary[0].text as string
+    expect(text).toContain('Task:')
+    expect(text).toContain('Last action:')
+    expect(text).not.toContain('13800138000')
+    expect(text).not.toContain('zhangsan@example.com')
+    expect(text).not.toContain('示例科技有限公司')
+    expect(text).toContain('【已脱敏:手机号】')
+    expect(text).toContain('【已脱敏:邮箱】')
+    expect(text).toContain('【已脱敏:企业名】')
+  })
+})

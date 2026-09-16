@@ -207,10 +207,16 @@ export function apply(ctx: Context, config: unknown): void {
   writeState({ engineMounted, slotHolder: engineMounted ? null : slotHolder, ...(stateRouteError !== null ? { stateRouteError } : {}) })
 
   const getBudget = (session: object) => {
-    const agent = session as AgentLike
+    // measureBudget expects an AgentLike and reads agent.session — handing it
+    // the bare Session measured `undefined` and threw "Invalid value used as
+    // weak map key" inside the meter, killing every reminder pass silently
+    // (the billing-session zero-touch bug, caught live by reminderObserved).
+    const agent = { session } as AgentLike
     return measureBudget(ctx as never, agent)
   }
 
+  const reminderObserved = { briefed: 0, tiers: 0, grace: 0, noBudgetSessions: 0, passFailures: 0, lastPassFailure: '' }
+  let lastFailureWriteAt = 0
   if (cfg.auto) {
     attachReminder(ctx as never, {
       fallbackBufferTokens: cfg.fallbackBufferTokens,
@@ -232,6 +238,25 @@ export function apply(ctx: Context, config: unknown): void {
           }
         }
       })(),
+      onObservation: (observation) => {
+        switch (observation.kind) {
+          case 'briefed': reminderObserved.briefed += 1; break
+          case 'tier': reminderObserved.tiers += 1; break
+          case 'grace': reminderObserved.grace += 1; break
+          case 'no-budget': reminderObserved.noBudgetSessions += 1; break
+          case 'pass-failed': {
+            reminderObserved.passFailures += 1
+            reminderObserved.lastPassFailure = observation.reason.slice(0, 200)
+            // A persistently failing pass would otherwise rewrite the state
+            // file on every assembled prompt — coalesce to one write / 30s.
+            const now = Date.now()
+            if (now - lastFailureWriteAt < 30_000) return
+            lastFailureWriteAt = now
+            break
+          }
+        }
+        writeState({ reminderObserved: { ...reminderObserved } })
+      },
       logger: ctx.logger,
       pluginName: PLUGIN,
     })
