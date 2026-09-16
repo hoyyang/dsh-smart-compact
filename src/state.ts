@@ -16,7 +16,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { SessionArchiveReader, eventText, sessionEvents, type SessionEventLike, type SessionLogLike } from './history.js'
-import { handoffCheckpointText } from './rollover.js'
+import { handoffCheckpointWorstCaseText } from './rollover.js'
 
 export interface WindowAvailability {
   /** Live window number (windows start at #1; ctx_history's "live window" numbering). */
@@ -39,8 +39,11 @@ export interface PricedNodeLike {
  * a wrongly disabled click costs nothing (the command stays available).
  */
 export function framedCheckpointTokenEstimate(estimateMessage?: (message: unknown) => number): number {
-  // Longest template variant (the no-notes wording) at a late window number.
-  const template = handoffCheckpointText(98, false)
+  // The longest template the engine can ever frame: no-notes wording, a late
+  // window number, and both derived orientation lines at their hard caps —
+  // so the real anchor (shorter or missing lines) always prices at or below
+  // this bound and the probe keeps erring toward "inert".
+  const template = handoffCheckpointWorstCaseText()
   const blocks = [
     { type: 'text', text: 'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context.\n\n<compacted-summary>' },
     { type: 'text', text: template },

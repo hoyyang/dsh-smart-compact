@@ -8,7 +8,12 @@
  *                  the mechanism exists at all (the携程-session gap: without
  *                  it the model never touches the tools).
  *   2. tiers     — at 25% / 50% / 75% context consumption, a short nudge.
- *   3. grace     — remaining <= fallbackBufferTokens: write handoff notes now.
+ *   3. grace     — the engine's wrap-up band (consumption at/above
+ *                  thresholdRatio, or remaining <= fallbackBufferTokens as a
+ *                  belt-and-braces floor): write handoff notes now. Firing at
+ *                  the threshold — not only when almost nothing is left — is
+ *                  what makes the nudge arrive while there is still room to
+ *                  act on it.
  * @module dsh-smart-compact/reminder
  */
 import type { BudgetSnapshot } from './budget.js'
@@ -20,8 +25,16 @@ interface AssembledLike {
 }
 
 export interface ReminderDeps {
-  /** Grace-band width in tokens; grace reminder fires while remaining <= this. */
+  /** Grace-band width in tokens; belt-and-braces floor for the grace reminder. */
   fallbackBufferTokens: number
+  /**
+   * The engine's grace-band entry (rollover.ts three-band policy): once
+   * consumption reaches this fraction the next rollover is near, so the
+   * write-notes nudge must fire NOW — a reminder that waits until only a few
+   * thousand tokens remain arrives when there is no room left to act on it
+   * (the engine's own log-only grace line had exactly that late-firing gap).
+   */
+  thresholdRatio: number
   /** Live budget, or null when the model/window is unknown. */
   getBudget(session: object): Promise<BudgetSnapshot | null>
   /** Current window generation (number of completed rollovers). */
@@ -97,7 +110,7 @@ export function attachReminder(
         }
       }
       tiersDone.set(session, done)
-      if (budget.remaining <= deps.fallbackBufferTokens) {
+      if (budget.remaining <= deps.fallbackBufferTokens || usedFraction >= deps.thresholdRatio) {
         // Isolate the generation probe: a host that cannot count windows must
         // not take the briefing and the tier nudges down with it (they share
         // this try block). Degraded = the grace nudge fires once, with a warn.

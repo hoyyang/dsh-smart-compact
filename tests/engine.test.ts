@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
-import { RolloverCompactionEngine, windowGeneration } from '../src/rollover.ts'
+import { RolloverCompactionEngine, buildHandoffCheckpoint, deriveHandoffContext, handoffCheckpointWorstCaseText, HANDOFF_LINE_MAX, windowGeneration } from '../src/rollover.ts'
 import { consumeRollover, requestRollover } from '../src/new-context.ts'
 import type { CtxLike } from '../src/budget.ts'
 
@@ -97,9 +97,51 @@ describe('RolloverCompactionEngine.summarize — the zero-model-call handoff', (
     const { engine } = makeEngine(makeFakeCtx(0), { hasNotes: async () => false })
     const agent = makeAgent([])
     const text = (await engine.summarize({}, agent as never, undefined)).summary[0].text
-    expect(text).toContain('no ctx_notes were written')
+    expect(text).toContain('no ctx_notes yet')
     expect(text).toContain('ctx_history')
     expect(text).not.toContain('live in ctx_notes')
+  })
+
+  it('carries mechanical Task/Last-action orientation lines derived from the log (v0.4.6)', async () => {
+    const ctx = makeFakeCtx(0)
+    const { engine } = makeEngine(ctx)
+    const agent = makeAgent([
+      { seq: 1, type: 'session/title', data: { title: '移动-ISS-202609-00049110A' } },
+      { seq: 2, type: 'user/message', data: { content: [{ type: 'text', text: '分析这个反馈单\n第二行不应出现' }] } },
+    ] as never)
+    const text = (await engine.summarize({}, agent as never, undefined)).summary[0].text as string
+    expect(text).toContain('Task: 移动-ISS-202609-00049110A')
+    expect(text).toContain('Last action: 分析这个反馈单')
+    expect(text).toContain('newest exchange remains visible in this window')
+  })
+
+  it('omits the orientation lines when the log carries nothing derivable', async () => {
+    const ctx = makeFakeCtx(0)
+    const { engine } = makeEngine(ctx)
+    const text = (await engine.summarize({}, makeAgent([]) as never, undefined)).summary[0].text as string
+    expect(text).not.toContain('Task:')
+    expect(text).not.toContain('Last action:')
+  })
+
+  it('caps derived orientation lines at HANDOFF_LINE_MAX', () => {
+    const long = '很长的任务描述'.repeat(40)
+    const derived = deriveHandoffContext([
+      { seq: 1, type: 'session/title', data: { title: long } },
+      { seq: 2, type: 'user/message', data: { content: [{ type: 'text', text: long }] } },
+    ])
+    expect(derived.task.length).toBeLessThanOrEqual(HANDOFF_LINE_MAX + 1)
+    expect(derived.last.length).toBeLessThanOrEqual(HANDOFF_LINE_MAX + 1)
+    expect(derived.task.endsWith('…')).toBe(true)
+  })
+
+  it('prices the worst-case template at or above every real anchor (probe stays biased inert)', () => {
+    const filler = 'x'.repeat(HANDOFF_LINE_MAX)
+    const worst = handoffCheckpointWorstCaseText()
+    for (const notesAssured of [true, false]) {
+      for (const context of [undefined, { task: '', last: '' }, { task: '任务', last: '最后动作' }, { task: filler, last: filler }]) {
+        expect(worst.length).toBeGreaterThanOrEqual(buildHandoffCheckpoint(98, notesAssured, context).length)
+      }
+    }
   })
 
   it('keeps the notes-first anchor when notes exist, the probe throws, or it is absent', async () => {

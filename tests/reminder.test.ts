@@ -9,13 +9,14 @@ interface Harness {
   assemble(session: object | undefined, assembled?: Record<string, unknown>): Promise<Record<string, unknown>>
 }
 
-function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts?: { fallbackBufferTokens?: number; getWindowGeneration?: () => number }): Harness {
+function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts?: { fallbackBufferTokens?: number; thresholdRatio?: number; getWindowGeneration?: () => number }): Harness {
   const listeners = new Map<string, Array<(...args: unknown[]) => unknown>>()
   const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
   attachReminder(
     { on: (event: string, listener: (...args: unknown[]) => unknown) => { const b = listeners.get(event) ?? []; b.push(listener); listeners.set(event, b) } },
     {
       fallbackBufferTokens: opts?.fallbackBufferTokens ?? 8192,
+      thresholdRatio: opts?.thresholdRatio ?? 0.85,
       getBudget: async (session: object) => (session ? (typeof budgetSource === 'function' ? budgetSource() : budgetSource) : null),
       getWindowGeneration: opts?.getWindowGeneration ?? (() => 0),
       logger,
@@ -55,6 +56,15 @@ describe('attachReminder — tiered budget awareness', () => {
     expect(String(at25.system)).toContain('reached 25%')
     const again = await h.assemble(session, { system: 'BASE' })
     expect(String(again.system)).toBe('BASE')
+  })
+
+  it('grace nudge fires at the engine threshold (85%), not only near exhaustion', async () => {
+    // 86% used → inside the engine's grace band, but remaining (14_000) is far
+    // above the old belt-and-braces floor (8_192): the pre-v0.4.6 condition
+    // would have stayed silent until almost nothing was left.
+    const h = makeHarness(budget(86_000))
+    const out = await h.assemble(session, { system: 'BASE' })
+    expect(String(out.system)).toContain('LOW CONTEXT')
   })
 
   it('grace nudge fires per window generation, not repeatedly', async () => {

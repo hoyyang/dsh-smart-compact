@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SessionArchiveReader, eventText, sessionEvents, type SessionEventLike } from '../src/history.ts'
+import { SessionArchiveReader, renderWindowListing, eventText, sessionEvents, type SessionEventLike } from '../src/history.ts'
 
 function eventsWithOneRollover(): SessionEventLike[] {
   return [
@@ -23,6 +23,20 @@ describe('sessionEvents — host Session API adapter', () => {
 
   it('fails loud (naming the missing capability) instead of returning an empty log', () => {
     expect(() => sessionEvents({ id: 'legacy' } as never)).toThrow(/does not expose snapshotEvents\(\)/)
+  })
+})
+
+describe('renderWindowListing — the ctx_history list rendering', () => {
+  it('explains sparsity and retain-last so seq gaps are not misread as loss (v0.4.6)', () => {
+    const empty = renderWindowListing([])
+    expect(empty).toContain('no rollover has happened yet')
+    expect(empty).toContain('live window: #1')
+    const out = renderWindowListing([{ index: 1, startSeq: 8, endSeq: 382, shadowedSeqs: [8, 100, 382], shadowedTokenCount: 96952 }])
+    expect(out).toContain('window #1: seqs 8–382 (3 events, ~96952 tokens archived)')
+    expect(out).toContain('seq gaps are expected')
+    expect(out).toContain('housekeeping is never archived')
+    expect(out).toContain('newest message stays in the live window')
+    expect(out).toContain('live window: #2')
   })
 })
 

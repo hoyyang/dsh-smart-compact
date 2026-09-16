@@ -125,8 +125,9 @@ describe('framedCheckpointTokenEstimate', () => {
       const content = (message as { content: Array<{ text: string }> }).content
       return content.reduce((sum, b) => sum + Math.ceil(b.text.length / 4) + 4, 4)
     })
-    // The five-line template plus framing lands well above 100 tokens and
-    // below 500 — wide bounds that survive host pricing drift.
+    // The worst-case template (orientation lines at their caps) plus framing
+    // lands well above 100 tokens and below 500 — wide bounds that survive
+    // host pricing drift.
     expect(estimate).toBeGreaterThan(100)
     expect(estimate).toBeLessThan(500)
   })

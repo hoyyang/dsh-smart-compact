@@ -165,6 +165,27 @@ export class SessionArchiveReader {
   }
 }
 
+/**
+ * The ctx_history action=list rendering. The sparsity note is load-bearing:
+ * archived counts are CONTEXT-SURFACE events only (housekeeping markers like
+ * step/turn/request never enter the model context, so they are never archived
+ * either), and the range always ends one surface node short of the newest
+ * message (retain-last). A reviewer reading "seqs 8–382 (95 events)" must not
+ * infer dropped content or a mid-reply cut from the gap — both were observed
+ * in a post-rollover audit that mis-reconstructed the switch point exactly
+ * this way (ISS-202609-00049110A session, 2026-09-16).
+ */
+export function renderWindowListing(windows: ArchivedWindow[]): string {
+  if (windows.length === 0) {
+    return '(no rollover has happened yet — the whole conversation is still in the live window)\nlive window: #1'
+  }
+  return [
+    ...windows.map((w) => `window #${w.index}: seqs ${w.startSeq}–${w.endSeq} (${w.shadowedSeqs.length} events, ~${w.shadowedTokenCount} tokens archived)`),
+    'note: counts are context-surface events — seq gaps are expected (housekeeping is never archived), and the newest message stays in the live window; locate with search, then read.',
+    `live window: #${windows.length + 1} (the rollover handoff header names this window)`,
+  ].join('\n')
+}
+
 /** Shape of the ctx_history tool arguments. */
 export interface HistoryArgs {
   action: 'list' | 'read' | 'search'

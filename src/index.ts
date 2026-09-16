@@ -22,7 +22,7 @@ import type {} from '@deepseek-ai/dsh-token-meter'
 import type {} from '@deepseek-ai/dsh-llm'
 import { resolveConfig, estimateTokens } from './config.js'
 import { NotesStore, type NotesArgs } from './notes.js'
-import { SessionArchiveReader, sessionEvents, type HistoryArgs, type SessionLogLike } from './history.js'
+import { SessionArchiveReader, renderWindowListing, sessionEvents, type HistoryArgs, type SessionLogLike } from './history.js'
 import { measureBudget, resolveModelTarget, wrapUpAdvice, type AgentLike } from './budget.js'
 import { requestRollover, consumeRollover, type PendingRollover } from './new-context.js'
 import { attachReminder } from './reminder.js'
@@ -214,6 +214,7 @@ export function apply(ctx: Context, config: unknown): void {
   if (cfg.auto) {
     attachReminder(ctx as never, {
       fallbackBufferTokens: cfg.fallbackBufferTokens,
+      thresholdRatio: cfg.thresholdRatio,
       getBudget,
       getWindowGeneration: (() => {
         let warned = false
@@ -324,12 +325,7 @@ export function apply(ctx: Context, config: unknown): void {
       const reader = new SessionArchiveReader(sessionEvents(agent.session), cfg.maxToolOutputTokens)
       switch (args.action) {
         case 'list': {
-          const windows = reader.listWindows()
-          if (windows.length === 0) return '(no rollover has happened yet — the whole conversation is still in the live window)\nlive window: #1'
-          return [
-            ...windows.map((w) => `window #${w.index}: seqs ${w.startSeq}–${w.endSeq} (${w.shadowedSeqs.length} events, ~${w.shadowedTokenCount} tokens archived)`),
-            `live window: #${windows.length + 1} (the rollover handoff header names this window)`,
-          ].join('\n')
+          return renderWindowListing(reader.listWindows())
         }
         case 'read': {
           if (!Array.isArray(args.seqs) || args.seqs.length === 0) throw new Error(`${PLUGIN}: ctx_history read requires non-empty \`seqs\` (run action=list first)`)

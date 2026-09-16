@@ -129,7 +129,7 @@ function successReceipt(result: SmartCompactOutcome, remaining: string | null, n
   const windowNo = openedWindowNo(result)
   const head = `✅ 换窗完成：${windowNo ? `新窗口 #${windowNo}` : '新窗口已就绪'} · 归档 ${result.shadowedSeqs.length} 条 (~${formatTokens(result.shadowedTokenCount)} tok)`
   const body = [
-    '旧窗口已 100% 机械归档（零模型调用、零摘要损耗）；细节用 ctx_history 逐字召回，工作笔记在 ctx_notes。',
+    '旧窗口已 100% 机械归档（零模型调用、零摘要损耗）；细节用 ctx_history 逐字召回，工作笔记（若有）在 ctx_notes。',
     notesAdvisory,
     remaining,
   ].filter((line): line is string => line !== null)
@@ -143,7 +143,7 @@ async function missingNotesLine(deps: SmartCompactDeps, agent: unknown): Promise
     const sessionId = (agent as { session?: { id?: unknown } } | null | undefined)?.session?.id
     if (typeof sessionId !== 'string') return null
     if (await deps.hasNotes(sessionId)) return null
-    return '⚠️ 上一窗口未写过 ctx_notes：新窗口的交接锚点已按「ctx_history 召回」模式生成；重要任务建议换窗前先写笔记。'
+    return '⚠️ 本会话至今未写过 ctx_notes：新窗口的交接锚点已按「ctx_history 召回」模式生成；重要任务建议换窗前先写笔记（关键结论若已落盘到项目记忆/STATE，新窗口可直接引用，无需重做）。'
   } catch {
     return null
   }

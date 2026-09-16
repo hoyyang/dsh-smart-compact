@@ -42,7 +42,7 @@ describe('/smart-compact — 100% lossless window switch', () => {
     const deps = makeDeps({ hasNotes: async () => false })
     const out = await executeSmartCompact(deps, invocation())
     expect(out.kind).toBe('success')
-    expect(out.text).toContain('⚠️ 上一窗口未写过 ctx_notes')
+    expect(out.text).toContain('⚠️ 本会话至今未写过 ctx_notes')
     expect(out.text).toContain('ctx_history 召回')
   })
 

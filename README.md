@@ -50,7 +50,7 @@ The composer tool row carries a **26px perfect-circle button** (amber-gold vorte
 
 上下文快满（默认窗口的 85%）时不再"把旧对话压成摘要"，而是：先把旧窗口整体**原封不动存档**（本来就有的会话持久化流，零新存储）→ 留 8192 token 缓冲让模型写交接笔记 → 然后开一张干净的新窗口，窗口里只放一段固定模板（"旧窗口已完整存档，当前状态在 ctx_notes，细节用 ctx_history 查"）。全程**不调用一次摘要模型**；旧内容无损、随时可精确回读。
 
-锚点模板按笔记实况生成：会话写过 ctx_notes → 指向笔记（"从笔记继续"）；从未写过 → 明确声明"上一窗口没有笔记"，并指示用 ctx_history 重建上下文——绝不指向一个空笔记通道（v0.3.2 修复：手动换窗不等笔记、模板无条件指向笔记导致新窗口考古的问题）。
+锚点模板按笔记实况生成：会话写过 ctx_notes → 指向笔记（"从笔记继续"）；从未写过 → 明确声明"本会话至今没有笔记"，并指示用 ctx_history（以及已落盘的项目记忆/STATE）重建上下文——绝不指向一个空笔记通道（v0.3.2 修复：手动换窗不等笔记、模板无条件指向笔记导致新窗口考古的问题）。\n\n锚点自带任务定向行（v0.4.6）：模板会附上两行**机械推导**（零模型调用、定长截断）的上下文——`Task:`（取最近一次会话标题）与 `Last action:`（取最新内容事件的首行）；并明确声明"最新一条消息仍保留在本窗口中，归档覆盖其余全部"。前者消除"任务盲续接"（新窗口不用猜这个会话在干什么），后者防止把归档区间的 seq 稀疏误读成"收尾汇报丢失"。可用性探针按两行取最坏情况定长计价，压缩事务的"检查点必须小于待归档内容"硬不等式不受影响。\n\nThe anchor carries two mechanically derived orientation lines (v0.4.6): `Task:` from the latest session title and `Last action:` from the newest content event, both hard-capped, plus an explicit "the newest exchange remains visible in this window" note. The availability probe prices their worst case, so the compaction transaction's size invariant is never surprised. The write-notes grace reminder now fires when consumption reaches the engine's grace band (`thresholdRatio`, default 85%) instead of waiting until only a few thousand tokens remain — a nudge that late arrives when there is no room to act on it.
 
 窗口编号口径：handoff 头里的 `Context window #N` 就是**会话内窗口序号**（第一张窗口 = #1），与 `ctx_history list` 打印的 `window #N` 同一套序号；list 额外给出 `live window: #N` 指明当前窗口。
 

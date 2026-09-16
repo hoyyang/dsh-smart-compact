@@ -15,7 +15,7 @@
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { measureBudget, type AgentLike, type CtxLike } from './budget.js'
-import { sessionEvents, type SessionLogLike } from './history.js'
+import { eventText, sessionEvents, type SessionEventLike, type SessionLogLike } from './history.js'
 import { consumeRollover, type PendingRollover } from './new-context.js'
 
 type CompactionResult = NonNullable<Awaited<ReturnType<BasicCompactionEngine['compactIfNeeded']>>>
@@ -62,27 +62,109 @@ function openedWindowNumber(generation: number): number {
 
 const ROLLOVER_TEMPLATE_MARKER = '[smart-compact rollover]'
 
+/** Hard char cap for each derived orientation line (the probe prices this worst case). */
+export const HANDOFF_LINE_MAX = 80
+
 /**
- * The fixed handoff checkpoint text for one window switch, factored out so the
- * availability probe (src/state.ts) can price the SAME bytes the engine would
+ * Mechanically derived task orientation for the handoff anchor. The anchor
+ * used to be task-blind: continuation succeeded only when the cut happened to
+ * land after the task finished (observed on ISS-202609-00049110A — the next
+ * window had to guess what the session was even about). Both lines are pure
+ * projections of the durable log, so they cost zero model calls.
+ */
+export interface HandoffContext {
+  /** Session task, from the latest session/title event. */
+  task: string
+  /** The last thing that happened, from the newest content event (first line only). */
+  last: string
+}
+
+function firstLineOf(text: string, width: number): string {
+  const line = text.split('\n').find((l) => l.trim().length > 0) ?? ''
+  const clean = line.trim()
+  return clean.length > width ? `${clean.slice(0, width)}…` : clean
+}
+
+/** Event-type prefixes that never carry conversation content. */
+const NON_CONTENT_PREFIXES = ['compaction/', 'session/', 'request/', 'step/', 'turn/', 'agent/', 'model/', 'sandbox/', 'approval/', 'permission/']
+
+function isContentEvent(type: string): boolean {
+  return !NON_CONTENT_PREFIXES.some((prefix) => type.startsWith(prefix)) && type !== 'system/message'
+}
+
+/**
+ * Derive the two orientation lines from the durable log. Never throws: a
+ * probe of any shape degrades to an omitted line, and the anchor stays valid
+ * without them (the probe's worst-case pricing covers both line counts).
+ */
+export function deriveHandoffContext(events: ReadonlyArray<SessionEventLike>): HandoffContext {
+  let task = ''
+  let last = ''
+  try {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]!
+      if (task === '' && event.type === 'session/title') {
+        const title = (event.data as { title?: unknown } | null | undefined)?.title
+        if (typeof title === 'string' && title.trim() !== '') task = firstLineOf(title, HANDOFF_LINE_MAX)
+      }
+      if (last === '' && isContentEvent(event.type)) {
+        const text = eventText(event)
+        if (text.trim() !== '') last = firstLineOf(text, HANDOFF_LINE_MAX)
+      }
+      if (task !== '' && last !== '') break
+    }
+  } catch { /* orientation is best-effort by contract */ }
+  return { task, last }
+}
+
+/**
+ * The handoff checkpoint text for one window switch, factored out so the
+ * availability probe (src/state.ts) can price the SAME shape the engine would
  * write: the compaction transaction refuses to run when the framed checkpoint
  * does not price strictly smaller than the shadowed content, so "is a click
- * useful" is a token-mass comparison against exactly this text.
+ * useful" is a token-mass comparison against exactly this template.
  */
-export function handoffCheckpointText(generation: number, notesAssured: boolean): string {
+export function buildHandoffCheckpoint(generation: number, notesAssured: boolean, context?: HandoffContext): string {
   const notesLine = notesAssured
     ? 'Handoff: current goal, decisions, and next steps live in ctx_notes (read it first).'
-    : 'Handoff: no ctx_notes were written in the previous window — there is nothing to read there.'
+    : 'Handoff: this session has no ctx_notes yet — there is nothing to read there.'
   const carryLine = notesAssured
     ? "Continue the user's task from the notes; do not assume anything not written there."
-    : "Continue the user's task; reconstruct any missing context via ctx_history before assuming it."
+    : "Continue the user's task; reconstruct missing context via ctx_history (and any persisted project memory) before assuming it."
   return [
     `${ROLLOVER_TEMPLATE_MARKER} Context window #${openedWindowNumber(generation)} opened.`,
-    'The previous window was archived in full — no content was summarized or lost.',
+    'The previous window was archived in full — nothing was summarized away or lost.',
+    // Retain-last semantics of the base engine: the range always ends one
+    // surface node short, so the newest message is never shadowed (documented
+    // in src/state.ts and observed live). Saying so prevents the next window
+    // from mis-reconstructing a "lost final reply" out of the sparse archive
+    // range (observed on the same ISS audit).
+    'The newest exchange remains visible in this window; the archive covers everything older (nothing was dropped).',
+    ...(context?.task ? [`Task: ${context.task}`] : []),
+    ...(context?.last ? [`Last action: ${context.last}`] : []),
     notesLine,
     'Missing details: ctx_history search/read recalls exact original events on demand.',
     carryLine,
   ].join(' ')
+}
+
+/** The static (no derived context) variant; kept for compatibility and tests. */
+export function handoffCheckpointText(generation: number, notesAssured: boolean): string {
+  return buildHandoffCheckpoint(generation, notesAssured)
+}
+
+/**
+ * The longest template the engine can ever frame: late window number, no-notes
+ * wording, and both orientation lines at their hard caps. The availability
+ * probe prices THIS, so its comparison always errs toward "inert" regardless
+ * of what the real anchor ends up carrying.
+ */
+export function handoffCheckpointWorstCaseText(): string {
+  // CJK filler: per-char tokenization is the heavy end for this plugin's
+  // content — an ASCII filler would merge into fewer tokens and could
+  // underprice a real 80-char Chinese line.
+  const filler = '汉'.repeat(HANDOFF_LINE_MAX)
+  return buildHandoffCheckpoint(98, false, { task: filler, last: filler })
 }
 /** Consecutive budget-measurement failures before the degraded signal fires. */
 const BUDGET_DEGRADED_AFTER = 5
@@ -194,14 +276,19 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     // for the window it archived), not the rollover ordinal: summarize() runs
     // before this rollover's summary event is committed, so the window it opens
     // is generation + 2.
-    const generation = windowGeneration(sessionEvents(agent.session))
+    const events = sessionEvents(agent.session)
+    const generation = windowGeneration(events)
     // Anchor honesty: only promise the notes channel when the probe cannot
     // disprove it. A definitive "no notes" (observed on manual rollovers of
     // sessions that never wrote ctx_notes) must not point the next window at
     // an empty channel — say so and route reconstruction to ctx_history.
     const sessionId = typeof (agent.session as { id?: unknown }).id === 'string' ? (agent.session as { id: string }).id : null
     const notesAssured = sessionId === null || (await this.notesPresent(sessionId))
-    const summary: ContentBlock[] = [{ type: 'text', text: handoffCheckpointText(generation, notesAssured) }]
+    // Task orientation lines are mechanical (zero model calls) and hard-capped;
+    // the availability probe prices their worst case, so the size invariant of
+    // the compaction transaction is never surprised by them.
+    const context = deriveHandoffContext(events)
+    const summary: ContentBlock[] = [{ type: 'text', text: buildHandoffCheckpoint(generation, notesAssured, context) }]
     return {
       summary,
       provider: 'rollover-template',
