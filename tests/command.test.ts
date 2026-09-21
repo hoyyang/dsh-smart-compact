@@ -117,6 +117,27 @@ describe('/smart-compact — 100% lossless window switch', () => {
     expect((await executeSmartCompact(generic, invocation())).text).toContain('无法生成交接检查点')
   })
 
+  it('renders unexpected host failures as an honest receipt instead of a raw gateway toast', async () => {
+    // Live case (2026-09-21, dsh-kiro 建设): a corrupted session stream makes the
+    // token meter throw on every measure(); the raw rethrow surfaced to the user
+    // as "command.execute failed: gateway/internal: token meter: …".
+    const deps = makeDeps({ engine: { compactNow: vi.fn(async () => { throw new Error('token meter: step/start at seq 2787 arrived before turn 3/step 1 ended') }) } })
+    const out = await executeSmartCompact(deps, invocation())
+    expect(out.kind).toBe('error')
+    expect(out.text).toContain('❌ 换窗失败')
+    expect(out.text).toContain('token meter: step/start at seq 2787')
+    expect(out.text).toContain('对话未被改动')
+    expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining('command failed'))
+  })
+
+  it('renders non-Error throws with the same receipt shape', async () => {
+    const deps = makeDeps({ engine: { compactNow: vi.fn(async () => { throw 'boom' }) } })
+    const out = await executeSmartCompact(deps, invocation())
+    expect(out.kind).toBe('error')
+    expect(out.text).toContain('❌ 换窗失败')
+    expect(out.text).toContain('boom')
+  })
+
   it('register wires the command and disposes in-flight handlers', async () => {
     const registered: Array<Record<string, unknown>> = []
     const effects: Array<() => void> = []

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1 — 2026-09-21
+
+### Fixed
+- **/smart-compact now fails with an honest receipt instead of a raw gateway toast**: unexpected host errors thrown by the engine (previously rethrown and surfaced as `command.execute failed: gateway/internal: token meter: …`) are rendered as a human receipt naming the underlying error verbatim; the stack goes to the session log. Live case: the "dsh-kiro 建设" session.
+
+### Added
+- `scripts/patch-token-meter.mjs` — idempotent host patch (backup + `node --check` + auto-restore) that makes the token meter tolerate a dangling `step/start` (a host restore/remount can reset the turn counter mid-step, leaving the durable stream permanently unmeasurable; observed on 4 sessions, bricking manual/automatic compaction and the budget reminder for those sessions). The meter now warns and treats the doomed step as ended; healthy streams are unaffected. **Re-run after every dsh upgrade** (`node scripts/patch-token-meter.mjs`); a producer-side fix (write the missing step/end on restore) is reported upstream.
+
+### Verified
+- 664 stored sessions replayed under the patched fold: zero throws; exactly the 4 previously-bricked sessions hit the auto-heal branch.
+- 115/115 vitest (2 new receipt tests).
+
 ## 0.5.0 — 2026-09-16
 
 ### Added

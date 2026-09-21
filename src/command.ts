@@ -166,7 +166,14 @@ export async function executeSmartCompact(deps: SmartCompactDeps, invocation: Sm
   } catch (error) {
     if (invocation.signal.aborted) return { kind: 'error', text: '❌ 换窗已取消。' }
     if (error instanceof ManualCompactionError) return expectedFailure(error)
-    throw error
+    // Unexpected engine/host failures (e.g. a token-meter replay throw on a
+    // session with a corrupted stream) used to escape as a raw
+    // "command.execute failed: gateway/internal: …" toast with the plugin's
+    // name on a host-internal error. Fail loud, but on OUR receipt: name the
+    // underlying error verbatim, keep the stack in the session log.
+    const message = error instanceof Error ? error.message : String(error)
+    deps.logger.warn(`dsh-smart-compact: command failed (${message})`)
+    return { kind: 'error', text: `❌ 换窗失败：${message}。对话未被改动；详情见会话日志。` }
   }
 }
 

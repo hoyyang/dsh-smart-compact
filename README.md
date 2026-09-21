@@ -98,6 +98,7 @@ When the context approaches its limit (85% by default), the engine does not writ
 - **与第三方 `toolResultPruner` 的隔离**：该服务是可选的第三方实现，可能滞后于 dsh（实测一份陈旧副本仍在读已被上游移除的 `session.events`，会在基础压缩内部中断**每一次**换窗）。因为 rollover 是整窗机械归档、保留范围由区间选择决定，前置剪枝在这里没有收益——引擎因此运行在 `ctx.isolate('toolResultPruner')` 的子上下文上，永不咨询该服务。代价：手动 `/smart-compact` 路径同样不做前置剪枝（它只在窗口真正需要压缩时才可能收敛得更少）。apply 时会自检隔离是否生效，失效则打点警告。
 - **换窗请求不会被静默吞掉**：`new_context` 请求只在换窗**真正提交**时才被消费；被拒（无可压缩区间）或引擎报错时请求保留在 pending 集合里，逐步骤重试，并把最近一次原因写入探针（`lastRolloverRefusedAt` / `lastRolloverRefusedReason`，相同原因 30s 内合并写入）。步骤被中止（abort）时不算拒绝：请求继续挂起，不记 ops 事件。预算不可测（如模型未配 `contextWindow`）与换窗失败分开记账，连续 5 次触发 `budgetDegraded`。
 - Peer deps 声明随 dsh 主版本走（当前 `>=0.1.5-rc <2`）。插件自带的 `node_modules` 副本是**运行时真实解析目标**（插件的 realpath 不在宿主 `node_modules` 的解析链上），因此**升级 dsh 后必须重跑 `npm install` 并重建 `lib/`**，否则会继续加载旧核心 API。
+- **宿主 token-meter 容错补丁（v0.5.1 起，一次性）**：宿主 restore/remount 可能在旧 step 未收尾时重置 turn 计数，把会话持久流写坏——meter 重放从此永久抛错，/smart-compact、预算提醒与宿主自动压缩在该会话全部失效（本机实测 4 个会话中招）。`node scripts/patch-token-meter.mjs` 幂等修复（自动备份 + 语法校验，健康流零影响）；**每次升级 dsh 后重跑一次**。补丁前的失败路径也有兜底：命令回执会点名底层错误而不是裸抛 gateway toast。
 
 ## Uninstall 卸载
 
