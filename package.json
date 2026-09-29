@@ -2,7 +2,6 @@
   "name": "dsh-smart-compact",
   "version": "0.5.2",
   "description": "Codex-style context window auto-management for DSH: budget visibility, rollover compaction engine, notes handoff, history recall, one-click composer rollover button",
-  "private": true,
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
@@ -66,5 +65,8 @@
   },
   "dsh.bundle": {
     "patch": "./cordis.patch.yml"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
