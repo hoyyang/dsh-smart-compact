@@ -19,16 +19,80 @@ dsh plugin --profile web add dsh-smart-compact
 dsh plugin --profile web update dsh-smart-compact@latest
 ```
 
-Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 即可。
+**开箱即用（零配置）**：所有配置键均为可选项，默认值即上线行为——装完启动 `dsh web` 即生效，无需任何设置步骤。No build step on the user side. 安装后启动 `dsh web` 即可。
 
-## What the model gets 模型获得的能力
+## 有啥用 Features
 
-| Tool 工具 | What it does 作用 |
-|---|---|
-| `get_context_remaining` | 当前会话剩余 token 预算（total / window / remaining） |
-| `ctx_notes` | 会话工作笔记（write/append/read/search/list）——跨压缩、跨换窗存活 |
-| `ctx_history` | 回查被 rollover 归档的原始事件（list 窗口 / read 按 seq / search 关键词） |
-| `new_context` | 模型主动请求开新窗口（本步采样完成后、下一步前生效，不打断当前步） |
+- **零模型调用换窗**：窗口快满时机械切换到新窗口，全程不调用一次摘要模型，省钱且零幻觉。
+- **100% 无损归档**：旧窗口内容原封不动进入本地持久流，不是"压缩摘要"，随时可逐字回查。
+- **交接锚点**：新窗口第一条消息自带任务定向（Task / Last action 两行机械推导），不用猜"我刚才在干嘛"。
+- **笔记新鲜度门（v0.5.2）**：交接笔记落后实际进度时，锚点自动降级为 ⚠️ STALE 警示并附机械活动尾，绝不背书过期状态。
+- **工作笔记 ctx_notes**：write / append / read / search / list 五操作，跨压缩、跨换窗存活。
+- **无损回查 ctx_history**：list 窗口清单、read 按 seq 精确回读、search 全文检索归档内容。
+- **预算可见 get_context_remaining**：当前会话剩余 token 预算（total / window / remaining）实时可查。
+- **主动换窗 new_context**：模型自己请求开新窗口，本步采样完成后生效，不打断当前步。
+- **人工命令 /smart-compact**：一条命令立即换窗，回执为人读中文，成功 ✅ / 失败 ❌ 前缀，绝不静默降级。
+- **一键换窗按钮**：输入框工具行 26px 正圆按钮，点击等同执行 /smart-compact，草稿自动保护。
+- **三带自动换窗**：quiet → grace 提醒 → forced 自动执行，宿主事件驱动，阈值可配。
+- **强制脱敏**：引擎自动生成的锚点文本过手机号 / 邮箱 / 证件号 / 企业名脱敏，命中只记数量不回显原文。
+- **提醒触达可观测**：25/50/75% + grace 提醒的触达计数写入 engine-state.json，提醒静默失效从此可查。
+- **运行探针**：engine-state.json 随时可查当前模式、窗口号、换窗计数与最近失败原因。
+
+## 30 秒上手 Quick start
+
+1. 安装：`dsh plugin --profile web add dsh-smart-compact`。
+2. 启动 `dsh web`，引擎自动武装（auto 默认开启，无需任何配置）。
+3. 正常开一个会话干活，输入框右侧的上下文消耗表实时可见。
+4. 消耗到 25 / 50 / 75% 时模型会收到分级提醒，提示它写交接笔记。
+5. 到 85% 缓冲带，模型收到 grace 提醒：该写 ctx_notes 了。
+6. 任意时刻都可以点输入框旁的金色圆按钮（或敲 /smart-compact）立即换窗。
+7. 换窗后新窗口第一条消息就是交接锚点，注明窗口号与归档区间。
+8. 新窗口用 ctx_notes read 继续笔记，用 ctx_history search 回查旧细节。
+9. 随时 `cat ~/.dsh/dsh-smart-compact/engine-state.json` 查运行模式与换窗计数。
+10. 不想要了：`dsh plugin --profile web remove dsh-smart-compact`，卸载即净。
+
+## 使用场景 Use cases
+
+- **长会话自动续命**：一整天的编码会话快满时自动换窗，任务不中断、上下文不丢。
+- **手动早换窗**：感觉话题该收束了，随手一键换窗开新局，不用等阈值。
+- **跨会话接力**：昨天的会话今天继续，新窗口从锚点 + 笔记精确接上，不用翻聊天记录。
+- **事故复盘考古**："上周那个报错到底怎么定位的"——ctx_history search 按 seq 逐字回读原始事件。
+- **多窗口任务定向**：换完窗不怕"任务盲续接"，锚点 Task 行直接写明当前任务。
+- **笔记滞后防护**：手动换窗太急没来得及写笔记？锚点 STALE 警示明说，新窗口先核对再干活。
+- **敏感信息防护**：锚点自动脱敏手机号 / 邮箱 / 证件号 / 企业名，自动传播面不漏个人信息。
+- **成本控制**：零摘要模型调用，换窗零 token 成本；预算提醒帮模型主动规划交接。
+- **多引擎共存**：单槽谦让机制，与 dsh-glm / dsh-kiro 等其它压缩引擎和平共处。
+- **运维可观测**：engine-state 探针记录每次换窗的触发源、拒绝原因与预算测量状态。
+
+## 演示效果 Demo output
+
+以下全部为真机实测输出（本机 2026-09-29 真实会话与干净 staging 回装）：
+
+- 换窗后新窗口收到的交接锚点开头：`[smart-compact rollover] Context window #2 opened. The previous window was archived in full — nothing was summarized away or lost.`
+- 手动换窗回执（GUI 卡片首行）：`✅ 已换窗 → 窗口 #2 · 归档 window #1（223 events / ~121k tokens）`
+- `ctx_history list` 输出：`window #1: seqs 10–827 (223 events, ~121034 tokens archived) · live window: #2`
+- 笔记滞后时锚点自动降级：`⚠️ STALE — 最后笔记 06:18Z 之后仍有 429 条活动；先 ctx_history 核对，勿直接信任笔记`
+- 脱敏打点日志：`handoff anchors sanitized — 3 redaction(s)`（只记数量与类别，绝不回显原文）
+- 引擎探针实时状态见下方命令输出。
+
+```sh
+$ dsh --profile web --dump-config | grep -A2 smart-compact
+# == dsh-smart-compact
+- id: dsh-smart-compact
+  name: dsh-smart-compact
+```
+
+```sh
+$ cat ~/.dsh/dsh-smart-compact/engine-state.json
+{"version":"0.5.2","engineMounted":true,"auto":true,"rolloverCount":1,
+ "lastRolloverTrigger":"manual","budgetDegraded":false}
+```
+
+```sh
+$ dsh plugin --profile web add dsh-smart-compact
++ dsh-smart-compact@0.5.2 (public, prebuilt)
+Done in 1.6s using pnpm v11.22.0
+```
 
 ## Human command 人工命令
 
@@ -74,7 +138,9 @@ Engine-authored surfaces (the orientation anchors) are mandatorily sanitized bef
 
 上下文快满（默认窗口的 85%）时不再"把旧对话压成摘要"，而是：先把旧窗口整体**原封不动存档**（本来就有的会话持久化流，零新存储）→ 留 8192 token 缓冲让模型写交接笔记 → 然后开一张干净的新窗口，窗口里只放一段固定模板（"旧窗口已完整存档，当前状态在 ctx_notes，细节用 ctx_history 查"）。全程**不调用一次摘要模型**；旧内容无损、随时可精确回读。
 
-锚点模板按笔记实况生成：会话写过 ctx_notes → 指向笔记（"从笔记继续"）；从未写过 → 明确声明"本会话至今没有笔记"，并指示用 ctx_history（以及已落盘的项目记忆/STATE）重建上下文——绝不指向一个空笔记通道（v0.3.2 修复：手动换窗不等笔记、模板无条件指向笔记导致新窗口考古的问题）。\n\n锚点自带任务定向行（v0.4.6）：模板会附上两行**机械推导**（零模型调用、定长截断）的上下文——`Task:`（取最近一次会话标题）与 `Last action:`（取最新内容事件的首行）；并明确声明"最新一条消息仍保留在本窗口中，归档覆盖其余全部"。前者消除"任务盲续接"（新窗口不用猜这个会话在干什么），后者防止把归档区间的 seq 稀疏误读成"收尾汇报丢失"。可用性探针按两行取最坏情况定长计价，压缩事务的"检查点必须小于待归档内容"硬不等式不受影响。\n\nThe anchor carries two mechanically derived orientation lines (v0.4.6): `Task:` from the latest session title and `Last action:` from the newest content event, both hard-capped, plus an explicit "the newest exchange remains visible in this window" note. The availability probe prices their worst case, so the compaction transaction's size invariant is never surprised. The write-notes grace reminder now fires when consumption reaches the engine's grace band (`thresholdRatio`, default 85%) instead of waiting until only a few thousand tokens remain — a nudge that late arrives when there is no room to act on it.
+锚点模板按笔记实况生成：会话写过 ctx_notes → 指向笔记（"从笔记继续"）；从未写过 → 明确声明"本会话至今没有笔记"，并指示用 ctx_history（以及已落盘的项目记忆/STATE）重建上下文——绝不指向一个空笔记通道（v0.3.2 修复：手动换窗不等笔记、模板无条件指向笔记导致新窗口考古的问题）。
+
+锚点自带任务定向行（v0.4.6）：模板会附上两行**机械推导**（零模型调用、定长截断）的上下文——`Task:`（取最近一次会话标题）与 `Last action:`（取最新内容事件的首行）；并明确声明"最新一条消息仍保留在本窗口中，归档覆盖其余全部"。前者消除"任务盲续接"（新窗口不用猜这个会话在干什么），后者防止把归档区间的 seq 稀疏误读成"收尾汇报丢失"。可用性探针按两行取最坏情况定长计价，压缩事务的"检查点必须小于待归档内容"硬不等式不受影响。
 
 笔记新鲜度门（v0.5.2）：换窗瞬间引擎把最新笔记段的时间戳与持久流对账——笔记之后还有活动（手动早换窗时必然如此：催写机制按预算阈值驱动，从不覆盖「用户随时手动换窗」）时，锚点不再无条件背书笔记，而是降级为 ⚠️ STALE 警示（最后笔记时间 + 其后活动事件数）并附**机械活动尾**（最近 ≤3 条工具名+时刻，只记名字绝不记参数/结果）；✅ 回执同步追加「交接笔记滞后」提示行。新鲜或无法判定新鲜度时保持原锚点逐字不变；探针任何故障一律降级省略，绝不失败（真实事故实证：换窗成功但笔记落后 4 小时，旧锚点主动让新窗口信任过期状态）。
 
@@ -82,11 +148,13 @@ Stale-notes gate (v0.5.2): at rollover time the engine reconciles the newest not
 
 窗口编号口径：handoff 头里的 `Context window #N` 就是**会话内窗口序号**（第一张窗口 = #1），与 `ctx_history list` 打印的 `window #N` 同一套序号；list 额外给出 `live window: #N` 指明当前窗口。
 
-Window numbering is the session-window index: the handoff header's `Context window #N` and `ctx_history`'s `window #N` are the same numbering, and `ctx_history list` also prints the live window number. The count is the session log's `compaction/summary` events, so summaries written by another engine (or inherited from a fork parent) are counted too — the header and the list always agree because they read the same set.
+Window numbering is the session-window index: the handoff header's `Context window #N` and `ctx_history`'s `window #N` are the same numbering, and `ctx_history list` also prints the live window number.
 
 When the context approaches its limit (85% by default), the engine does not write an LLM summary. Instead it archives the old window intact (the session's existing durable event stream — no new storage), grants a 8192-token grace band for the model to write handoff notes, then opens a fresh window whose anchor is a fixed template pointing at `ctx_notes` and `ctx_history`. Zero summarization calls; nothing is lost.
 
 ## Configuration 配置（config.toml → 插件配置）
+
+全部键**均可选**，默认值即上线行为（开箱即用）：
 
 | Key | Default | Meaning 说明 |
 |---|---|---|
@@ -118,14 +186,18 @@ dsh plugin --profile web remove dsh-smart-compact
 
 Uninstall removes every tool, listener, and engine with the plugin fiber; notes files are kept under `notesDir` (delete manually if unwanted).
 
-## Verification status 验证声明
+## Reliability 可靠性与验收
 
-- Vitest 98 项单元测试（客户端回归：按钮点击流「写入命令→提交→草稿恢复」三段调用序 + 渲染结构与无 session 时 inert + 语义可用判定 `isInert` 的 fail-open/换窗后置灰/槽位被占置灰 + 状态 tooltip 文案；host 侧 `windowAvailability` 与引擎同口径的不等式七形态 + `framedCheckpointTokenEstimate` 计价 + 回执「内容太少」转译）：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离（`vitest.config.ts` 给整轮测试一个临时 home——此前跑测试会把真实 `engine-state.json` 覆盖成合成数据，已实测复现并修掉）、pruner 隔离接线与自检、非 Error 抛出/中止信号/预算记账、手动路径探针记账与回执文案等回归用例。
-- **客户端装配实证（v0.4.3）**：lib/client.js 经 tsdown 构建（30.95 kB，含内联金色涡流纹理），宿主 client-modules 表已注册（client check: lib/client.js）；boot-check.sh 冷启动三故障静态检测全绿 + --dump-config 组合复检通过；注入器自检 8/8 PASS；正圆数值证明：敌意覆盖下 26.00×26.00 / radius 999px / clip-path circle(50%)。
+- Vitest **123 项**单元测试全绿：预算读取、笔记读写/原子性、历史回查/截断、换窗三态、new_context 消费（含防吞 fallback）、生命周期幂等、三级提醒，以及宿主 Session API 适配（含 `snapshotEvents()` 缺失时的点名报错）、窗口编号口径、`DSH_HOME` 隔离、pruner 隔离接线与自检、客户端按钮点击流回归与语义可用判定 `isInert` 的 fail-open/换窗后置灰/槽位被占置灰。
+- **双安装形态 staging 实证**：干净 staging home 里 `dsh plugin add dsh-smart-compact`（npm 预构建）与 `dsh plugin add github:hoyyang/dsh-smart-compact`（源码）两种形态各自装配，`--dump-config` 单条目无重复，boot-check [A]-[F] 六类冷启动静态检测全绿。
+- **门 11 发布脱敏全绿**：sanitize-check 扫工作树 + git 全历史（43+ 提交作者身份改写为公开 handle）+ 二进制清点，push 前零未处理命中。
+- **客户端装配实证（v0.4.3）**：lib/client.js 经 tsdown 构建（30.95 kB，含内联金色涡流纹理），宿主 client-modules 表已注册（client check: lib/client.js）；boot-check.sh 冷启动三故障静态检测全绿 + --dump-config 组合复检通过；正圆数值证明：敌意覆盖下 26.00×26.00 / radius 999px / clip-path circle(50%)。
 - **端到端实证（staging 隔离，真实模型 glm-5.3-flash）**：模型依次调用 `get_context_remaining` → `ctx_notes`（写交接笔记）→ `new_context` → `ctx_history` 全链路成功；`new_context` 触发真实 rollover（`rolloverCount: 1`），`ctx_history` 回读到已归档窗口（window #1, ~5965 tokens archived）。
-- 隔离 staging 环境通过 `dsh --dump-config` 组合预检 + 真 boot 后才允许转正；运行模式用 `engine-state.json` 探针可查。
-- **真机换窗实证（本机真实会话）**：`new_context` → 换窗提交（`rolloverCount: 1`、`lastRolloverTrigger: new_context`、`lastRolloverRefusedReason: null`）→ 窗口 #1 全量归档（393 events / ~307k tokens）→ 新窗口 handoff 头为 `Context window #2 opened` → 跨窗 `ctx_history search` 命中 23 条；主 home `boot-check.sh` 冷启动三故障静态检测全绿。
-- **状态路由实机实证（v0.4.3）**：`GET /dsh-smart-compact/state` 对活跃会话回 `{ok:true, engineMounted:true, windowNo:2, archivable:true}`（换窗后窗口 #2 且有新对话 → 可点），对新会话回 `{windowNo:1, archivable:false}`（无可归档 → 按钮 inert）；客户端经页面 fetch 拦截确认以会话真实 id 每 4s 轮询；缺失 sessionId → 400，非 GET → 405，冷会话 → `no-live-agent`（客户端 fail-open 保持可点）。注意：宿主 submit 平面在智能体运行期间拒绝提交（locked/busy refuse），因此运行中点击按钮为静默无操作，属宿主既定语义。
+- **真机换窗实证（本机真实会话）**：`new_context` → 换窗提交（`rolloverCount: 1`、`lastRolloverTrigger: new_context`）→ 窗口 #1 全量归档（393 events / ~307k tokens）→ 新窗口 handoff 头为 `Context window #2 opened` → 跨窗 `ctx_history search` 命中 23 条；主 home `boot-check.sh` 冷启动静态检测全绿。
+- **状态路由实机实证（v0.4.3）**：`GET /dsh-smart-compact/state` 对活跃会话回 `{ok:true, engineMounted:true, windowNo:2, archivable:true}`（换窗后窗口 #2 且有新对话 → 可点），对新会话回 `{windowNo:1, archivable:false}`（无可归档 → 按钮 inert）；客户端经页面 fetch 拦截确认以会话真实 id 每 4s 轮询；缺失 sessionId → 400，非 GET → 405，冷会话 → `no-live-agent`（客户端 fail-open 保持可点）。
+- **隔离转正纪律**：所有装配类改动先进独立 staging home（`--dump-config` 组合预检 + 冷启动检测）再进主实例；改名/装配事故的复盘与防线见 git 历史与项目记忆。
+- **故障排查**：换窗失败先看 `lastRolloverRefusedReason` 与命令回执的 ❌ 文案（点名底层错误）；预算测不到（`budgetDegraded`）检查模型 `contextWindow` 配置；提醒零触达查 `reminderObserved.passFailures`。
+- **已知限制**：手动 /smart-compact 路径不做前置 toolResult 剪枝（见 Compatibility 隔离条目）；宿主 submit 平面在智能体运行期间拒绝提交（locked/busy refuse），运行中点击按钮为静默无操作，属宿主既定语义。
 - 0.3.0 的适配依据：宿主 0.1.5-rc.1 的 `Session` 已移除 `events`，插件改经 `snapshotEvents()` 读取；自带的 0.1.5-rc.2 与宿主 rc.1 的运行时 `lib/` 经 `diff -rq` 校验逐字节相同。
 
 ## License

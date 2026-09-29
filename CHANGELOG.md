@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3 — 2026-09-29
+
+### Changed
+- **README evidence restructure**: added Features / Quick start / Use cases / Demo output / Reliability & verification sections with real, deduplicated evidence entries (14 capability items, 10 numbered steps, 10 use cases, real command+output pairs from live sessions and clean staging); zero-config statement made explicit (all keys optional, defaults are the shipped behavior). README.en.md mirrors the same structure. No code changes — docs-only release aligning the published npm README with the repository (single source of truth).
+- Verification counts refreshed: 123/123 vitest, dual install-form staging verification (npm prebuilt + GitHub source), gate-11 sanitize green, boot-check [A]-[F] green.
+
 ## 0.5.2 — 2026-09-29
 
 ### Added
