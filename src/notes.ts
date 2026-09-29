@@ -106,7 +106,7 @@ export class NotesStore {
   /**
    * Epoch ms of the newest segment's header stamp (each append records an ISO
    * stamp in-band), or null when there are no parseable segments. This is the
-   * freshness anchor for the stale-notes gate (ISS-202609-00089191A: the
+   * freshness anchor for the stale-notes gate (Incident 2026-09-29: the
    * anchor vouched for notes that predated the session's latest work by a day).
    */
   async lastWrittenAtMs(sessionId: string): Promise<number | null> {

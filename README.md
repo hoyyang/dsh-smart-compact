@@ -62,7 +62,7 @@ The automatic path is host-event-driven (`agent/pre-step` pressure check + windo
 
 引擎**自动生成**的文本——交接锚点的 `Task:` / `Last action:` 两行——写入新窗口前强制过一遍脱敏：手机号、邮箱、18 位证件号、中英文企业名（按后缀识别）。命中只记**数量与类别**进日志（`handoff anchors sanitized — N redaction(s)`），绝不回显原文。
 
-边界（刻意为之）：逐字归档 `ctx_history` **不脱敏**——本机会话的无损回查是产品核心契约；脱敏只覆盖引擎自动生成、会自动传播的面。测试与文档样例一律合成数据（张三 / 13800138000 / example.com / 示例公司）。
+边界（刻意为之）：逐字归档 `ctx_history` **不脱敏**——本机会话的无损回查是产品核心契约；脱敏只覆盖引擎自动生成、会自动传播的面。测试与文档样例一律合成数据（张三 / 138****8000 / example.com / 示例公司）。
 
 Engine-authored surfaces (the orientation anchors) are mandatorily sanitized before entering a new window — phone / email / national-ID / company-name patterns, counts logged, content never echoed. The verbatim archive stays untouched on purpose (lossless local recall is the core contract).
 
@@ -72,7 +72,7 @@ Engine-authored surfaces (the orientation anchors) are mandatorily sanitized bef
 
 锚点模板按笔记实况生成：会话写过 ctx_notes → 指向笔记（"从笔记继续"）；从未写过 → 明确声明"本会话至今没有笔记"，并指示用 ctx_history（以及已落盘的项目记忆/STATE）重建上下文——绝不指向一个空笔记通道（v0.3.2 修复：手动换窗不等笔记、模板无条件指向笔记导致新窗口考古的问题）。\n\n锚点自带任务定向行（v0.4.6）：模板会附上两行**机械推导**（零模型调用、定长截断）的上下文——`Task:`（取最近一次会话标题）与 `Last action:`（取最新内容事件的首行）；并明确声明"最新一条消息仍保留在本窗口中，归档覆盖其余全部"。前者消除"任务盲续接"（新窗口不用猜这个会话在干什么），后者防止把归档区间的 seq 稀疏误读成"收尾汇报丢失"。可用性探针按两行取最坏情况定长计价，压缩事务的"检查点必须小于待归档内容"硬不等式不受影响。\n\nThe anchor carries two mechanically derived orientation lines (v0.4.6): `Task:` from the latest session title and `Last action:` from the newest content event, both hard-capped, plus an explicit "the newest exchange remains visible in this window" note. The availability probe prices their worst case, so the compaction transaction's size invariant is never surprised. The write-notes grace reminder now fires when consumption reaches the engine's grace band (`thresholdRatio`, default 85%) instead of waiting until only a few thousand tokens remain — a nudge that late arrives when there is no room to act on it.
 
-笔记新鲜度门（v0.5.2）：换窗瞬间引擎把最新笔记段的时间戳与持久流对账——笔记之后还有活动（手动早换窗时必然如此：催写机制按预算阈值驱动，从不覆盖「用户随时手动换窗」）时，锚点不再无条件背书笔记，而是降级为 ⚠️ STALE 警示（最后笔记时间 + 其后活动事件数）并附**机械活动尾**（最近 ≤3 条工具名+时刻，只记名字绝不记参数/结果）；✅ 回执同步追加「交接笔记滞后」提示行。新鲜或无法判定新鲜度时保持原锚点逐字不变；探针任何故障一律降级省略，绝不失败（ISS-202609-00089191A 实证：换窗成功但笔记落后 4 小时，旧锚点主动让新窗口信任过期状态）。
+笔记新鲜度门（v0.5.2）：换窗瞬间引擎把最新笔记段的时间戳与持久流对账——笔记之后还有活动（手动早换窗时必然如此：催写机制按预算阈值驱动，从不覆盖「用户随时手动换窗」）时，锚点不再无条件背书笔记，而是降级为 ⚠️ STALE 警示（最后笔记时间 + 其后活动事件数）并附**机械活动尾**（最近 ≤3 条工具名+时刻，只记名字绝不记参数/结果）；✅ 回执同步追加「交接笔记滞后」提示行。新鲜或无法判定新鲜度时保持原锚点逐字不变；探针任何故障一律降级省略，绝不失败（真实事故实证：换窗成功但笔记落后 4 小时，旧锚点主动让新窗口信任过期状态）。
 
 Stale-notes gate (v0.5.2): at rollover time the engine reconciles the newest notes segment stamp against the durable log. If window activity postdates the notes, the anchor downgrades to an explicit ⚠️ STALE warning plus a mechanical recent-activity tail (≤3 tool names + clocks, never arguments/results), and the success receipt carries the matching advisory. Fresh or undeterminable freshness keeps the classic wording verbatim; probe failures degrade to omission, never failure.
 

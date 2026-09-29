@@ -8,7 +8,7 @@
 - `deriveNotesFreshness()` / `deriveRecentActivity()` — zero-model mechanical helpers, exported for the command receipt and tests.
 
 ### Context
-- Live incident (session "ISS-202609-00089191A 反馈"): a manual /smart-compact at ~3% budget usage succeeded while the notes predated the window's latest work (the actual code commit and the STATE persist) by ~4 hours — the anchor actively vouched for the stale notes and the new window nearly continued from wrong state. The 100% archive was never at risk; the risk was silent mis-direction. Manual rollovers can happen at any budget level, so threshold-driven note reminders never fire — the gate closes that gap mechanically.
+- Live incident (2026-09-29 session): a manual /smart-compact at ~3% budget usage succeeded while the notes predated the window's latest work (the actual code commit and the STATE persist) by ~4 hours — the anchor actively vouched for the stale notes and the new window nearly continued from wrong state. The 100% archive was never at risk; the risk was silent mis-direction. Manual rollovers can happen at any budget level, so threshold-driven note reminders never fire — the gate closes that gap mechanically.
 
 ### Verified
 - 123/123 vitest (8 new: freshness verdicts, stale/fresh/unknown anchors, receipt advisory, activity-tail privacy, worst-case pricing still covers the STALE variant).

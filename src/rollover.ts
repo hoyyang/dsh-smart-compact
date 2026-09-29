@@ -76,7 +76,7 @@ export const HANDOFF_LINE_MAX = 80
 /**
  * Mechanically derived task orientation for the handoff anchor. The anchor
  * used to be task-blind: continuation succeeded only when the cut happened to
- * land after the task finished (observed on ISS-202609-00049110A — the next
+ * land after the task finished (observed on 2026-09-16 — the next
  * window had to guess what the session was even about). Both lines are pure
  * projections of the durable log, so they cost zero model calls.
  */
@@ -96,7 +96,7 @@ export const RECENT_ACTIVITY_MAX = 3
 
 /**
  * Mechanical freshness verdict for the handoff notes (zero model calls).
- * ISS-202609-00089191A: the anchor told the next window to trust ctx_notes
+ * Incident 2026-09-29: the anchor told the next window to trust ctx_notes
  * while the notes predated the session's latest work (the actual commit, the
  * STATE persist) by ~27 hours — presence was checked, freshness never was.
  */
@@ -211,7 +211,7 @@ function utcStamp(ms: number): string {
  * useful" is a token-mass comparison against exactly this template.
  */
 export function buildHandoffCheckpoint(generation: number, notesAssured: boolean, context?: HandoffContext, staleness?: HandoffStaleness): string {
-  // Stale-notes gate (ISS-202609-00089191A): a notes channel that exists but
+  // Stale-notes gate: a notes channel that exists but
   // predates the window's latest work must not be vouched for. The anchor
   // downgrades from "read it first / assume nothing beyond it" to an explicit
   // staleness warning that routes verification through ctx_history. Fresh or

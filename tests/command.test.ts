@@ -158,7 +158,7 @@ describe('/smart-compact — 100% lossless window switch', () => {
   })
 })
 
-describe('/smart-compact — stale-notes receipt advisory (ISS-202609-00089191A)', () => {
+describe('/smart-compact — stale-notes receipt advisory (incident 2026-09-29)', () => {
   const T0 = Date.parse('2026-09-28T03:01:00.000Z')
   const staleAgent = {
     id: 'a1',

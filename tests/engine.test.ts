@@ -107,11 +107,11 @@ describe('RolloverCompactionEngine.summarize — the zero-model-call handoff', (
     const ctx = makeFakeCtx(0)
     const { engine } = makeEngine(ctx)
     const agent = makeAgent([
-      { seq: 1, type: 'session/title', data: { title: '移动-ISS-202609-00049110A' } },
+      { seq: 1, type: 'session/title', data: { title: '移动-换窗复盘' } },
       { seq: 2, type: 'user/message', data: { content: [{ type: 'text', text: '分析这个反馈单\n第二行不应出现' }] } },
     ] as never)
     const text = (await engine.summarize({}, agent as never, undefined)).summary[0].text as string
-    expect(text).toContain('Task: 移动-ISS-202609-00049110A')
+    expect(text).toContain('Task: 移动-换窗复盘')
     expect(text).toContain('Last action: 分析这个反馈单')
     expect(text).toContain('newest exchange remains visible in this window')
   })
@@ -394,7 +394,7 @@ describe('RolloverCompactionEngine.summarize — mandatory anchor sanitization (
   })
 })
 
-describe('stale-notes gate (ISS-202609-00089191A: the anchor vouched for day-old notes)', () => {
+describe('stale-notes gate (incident 2026-09-29: the anchor vouched for day-old notes)', () => {
   const T0 = Date.parse('2026-09-28T03:01:00.000Z')
   const content = (text: string) => ({ content: [{ type: 'text', text }] })
 

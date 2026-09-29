@@ -179,7 +179,7 @@ export class SessionArchiveReader {
  * message (retain-last). A reviewer reading "seqs 8–382 (95 events)" must not
  * infer dropped content or a mid-reply cut from the gap — both were observed
  * in a post-rollover audit that mis-reconstructed the switch point exactly
- * this way (ISS-202609-00049110A session, 2026-09-16).
+ * this way (session of 2026-09-16).
  */
 export function renderWindowListing(windows: ArchivedWindow[]): string {
   if (windows.length === 0) {

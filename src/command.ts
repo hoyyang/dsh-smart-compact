@@ -156,7 +156,7 @@ async function missingNotesLine(deps: SmartCompactDeps, agent: unknown): Promise
 
 /**
  * Advisory "stale notes" line — the receipt-side mirror of the anchor's ⚠️
- * (ISS-202609-00089191A: the switch succeeded while the notes predated the
+ * (Incident 2026-09-29: the switch succeeded while the notes predated the
  * window's latest work, and nothing in the receipt flagged it). Advisory only:
  * any probe hiccup just drops the line.
  */
