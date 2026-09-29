@@ -7,7 +7,7 @@
 # Optional config keys (all optional, defaults shown in README):
 # - insert:
 #     - id: dsh-smart-compact
-#       name: '@dsh-external/dsh-smart-compact'
+#       name: 'dsh-smart-compact'
 #       config:
 #         enabled: true
 #         auto: true
@@ -17,4 +17,4 @@
 #         notesDir: /custom/path/dsh-smart-compact-notes
 - insert:
     - id: dsh-smart-compact
-      name: '@dsh-external/dsh-smart-compact'
+      name: 'dsh-smart-compact'

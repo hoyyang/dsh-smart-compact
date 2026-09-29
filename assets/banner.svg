@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-label="dsh-smart-compact">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0b1020"/>
+    <stop offset="1" stop-color="#2563eb"/>
+  </linearGradient></defs>
+  <rect width="1280" height="420" fill="url(#bg)"/>
+  <circle cx="1020" cy="90" r="150" fill="#ffffff" opacity="0.05"/>
+  <circle cx="1150" cy="330" r="210" fill="#ffffff" opacity="0.06"/>
+  <circle cx="880" cy="360" r="90" fill="#ffffff" opacity="0.04"/>
+  <rect x="84" y="128" width="10" height="118" rx="5" fill="#38bdf8"/>
+  <text x="118" y="196" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Inter, Segoe UI, sans-serif" font-size="64" font-weight="700" fill="#ffffff">dsh-smart-compact</text>
+  <text x="84" y="286" font-family="PingFang SC, Hiragino Sans GB, Microsoft YaHei, Inter, Segoe UI, sans-serif" font-size="30" fill="#e8edf7" opacity="0.86">无损上下文换窗 · 零模型调用 · 全量存档 · 可精确回读</text>
+</svg>

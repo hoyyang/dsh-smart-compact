@@ -1,6 +1,10 @@
 # dsh-smart-compact
 
-[![dsh-plugin](https://img.shields.io/badge/dsh-plugin-blue)](https://github.com/topic/dsh-plugin)
+![banner](assets/banner.svg)
+
+[![dsh-plugin](https://img.shields.io/badge/dsh-plugin-blue)](https://github.com/topics/dsh-plugin)
+
+[**English**](README.en.md) · [Releases](https://github.com/hoyyang/dsh-smart-compact/releases) · [更新日志](CHANGELOG.md)
 
 **Codex-style context window auto-management for DeepSeek Harness. / DeepSeek Harness 的 Codex 式上下文窗口自动管理插件。**
 
@@ -11,8 +15,8 @@ Give the model Codex CLI's new context strategy: live budget visibility, wrap-up
 ## Install / Update 安装与更新
 
 ```sh
-dsh plugin --profile web add @dsh-external/dsh-smart-compact
-dsh plugin --profile web update @dsh-external/dsh-smart-compact@latest
+dsh plugin --profile web add dsh-smart-compact
+dsh plugin --profile web update dsh-smart-compact@latest
 ```
 
 Then start `dsh web`. No build step on the user side. 安装后启动 `dsh web` 即可。
@@ -107,7 +111,7 @@ When the context approaches its limit (85% by default), the engine does not writ
 ## Uninstall 卸载
 
 ```sh
-dsh plugin --profile web remove @dsh-external/dsh-smart-compact
+dsh plugin --profile web remove dsh-smart-compact
 ```
 
 卸载即净：工具、监听器、引擎随插件 fiber 一起销毁；笔记文件保留在 `notesDir`（如需彻底清理请手动删除该目录）。压缩行为恢复为 DSH 默认。

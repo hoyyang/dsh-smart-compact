@@ -1,5 +1,5 @@
 /**
- * @dsh-external/dsh-smart-compact — Codex-style context window auto-management.
+ * dsh-smart-compact — Codex-style context window auto-management.
  *
  * Five components, all wired inside apply() so a fiber dispose removes every
  * one of them (lifecycle hygiene: no module-level state, no leaked listeners):
@@ -9,7 +9,7 @@
  *  4. new_context           — model-initiated fresh window request
  *  5. RolloverCompactionEngine — threshold/overflow/new_context window switch
  *    with a zero-model-call handoff template, plus the wrap-up reminder.
- * @module @dsh-external/dsh-smart-compact
+ * @module dsh-smart-compact
  */
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -30,7 +30,7 @@ import { RolloverCompactionEngine, windowGeneration } from './rollover.js'
 import { registerSmartCompactCommand } from './command.js'
 import { registerStateRoute } from './state.js'
 
-export const name = '@dsh-external/dsh-smart-compact'
+export const name = 'dsh-smart-compact'
 // 'webServer' powers the composer button's availability route and 'agents'
 // resolves the live session for it (cordis rule: every ctx.<service> a plugin
 // touches must be declared here — an undeclared access throws). Profiles
