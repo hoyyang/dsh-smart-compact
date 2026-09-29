@@ -40,6 +40,13 @@ export interface RolloverEngineConfig {
    * throwing, or true = keep the notes-first anchor.
    */
   hasNotes?: (sessionId: string) => Promise<boolean>
+  /**
+   * Epoch ms of the newest notes write (in-band segment stamp), or null when
+   * absent/unparseable. Feeds the stale-notes gate: when timestamped window
+   * activity postdates the notes, summarize() stops vouching for them and says
+   * so loudly. Absent, throwing, or null = freshness unknown = classic anchor.
+   */
+  lastNoteWrittenAt?: (sessionId: string) => Promise<number | null>
 }
 
 interface BasicEngineConfigInput {
@@ -78,6 +85,73 @@ export interface HandoffContext {
   task: string
   /** The last thing that happened, from the newest content event (first line only). */
   last: string
+  /** Optional mechanical tail of tool activity after the last notes write (stale-notes anchor only). */
+  recent?: string
+}
+
+/** Hard char cap for one recent-activity entry (tool name + clock, ASCII). */
+export const ACTIVITY_ENTRY_MAX = 32
+/** Max entries in the mechanical recent-activity tail. */
+export const RECENT_ACTIVITY_MAX = 3
+
+/**
+ * Mechanical freshness verdict for the handoff notes (zero model calls).
+ * ISS-202609-00089191A: the anchor told the next window to trust ctx_notes
+ * while the notes predated the session's latest work (the actual commit, the
+ * STATE persist) by ~27 hours — presence was checked, freshness never was.
+ */
+export interface NotesFreshness {
+  /** True when verifiable window activity happened after the last notes write. */
+  stale: boolean
+  /** Content events with a verified later timestamp than the last notes write. */
+  eventsAfter: number
+  /** Newest timestamped content-event time (ms), when any exist. */
+  lastActivityAtMs: number | null
+}
+
+/**
+ * Compare the last notes write against the durable log. Any timestamped
+ * content event strictly after the note makes the notes stale. Events without
+ * a timestamp stop the tail scan: they cannot prove staleness, and the anchor
+ * must never claim a verdict it cannot prove (same honesty contract as
+ * notesPresent — a probe of any shape degrades, it never invents).
+ */
+export function deriveNotesFreshness(events: ReadonlyArray<SessionEventLike>, lastNoteWrittenAtMs: number | null): NotesFreshness {
+  let eventsAfter = 0
+  let lastActivityAtMs: number | null = null
+  try {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]!
+      if (typeof event.time !== 'number' || !Number.isFinite(event.time)) break
+      const text = isContentEvent(event.type) ? eventText(event) : ''
+      if (text.trim() === '') continue
+      if (lastActivityAtMs === null) lastActivityAtMs = event.time
+      if (lastNoteWrittenAtMs !== null && event.time > lastNoteWrittenAtMs) eventsAfter += 1
+    }
+  } catch { /* freshness is best-effort by contract */ }
+  return { stale: lastNoteWrittenAtMs !== null && eventsAfter > 0, eventsAfter, lastActivityAtMs }
+}
+
+/**
+ * Mechanically list the newest tool invocations after a point in time, for the
+ * stale-notes anchor: even when the model skipped the notes, the next window
+ * must SEE that work happened after they were written. Tool names and times
+ * only — never arguments or results, which can carry user content.
+ */
+export function deriveRecentActivity(events: ReadonlyArray<SessionEventLike>, afterMs: number | null, max: number = RECENT_ACTIVITY_MAX): string {
+  if (afterMs === null) return ''
+  const entries: string[] = []
+  try {
+    for (let index = events.length - 1; index >= 0 && entries.length < max; index -= 1) {
+      const event = events[index]!
+      if (typeof event.time !== 'number' || !Number.isFinite(event.time) || event.time <= afterMs) continue
+      if (event.type !== 'tool/call' && event.type !== 'tool/ptc-dispatch') continue
+      const name = (event.data as { name?: unknown } | null | undefined)?.name
+      if (typeof name !== 'string' || name.trim() === '') continue
+      entries.push(`${firstLineOf(name, ACTIVITY_ENTRY_MAX)}@${new Date(event.time).toISOString().slice(11, 16)}`)
+    }
+  } catch { /* orientation is best-effort by contract */ }
+  return entries.reverse().join(', ')
 }
 
 function firstLineOf(text: string, width: number): string {
@@ -118,6 +192,17 @@ export function deriveHandoffContext(events: ReadonlyArray<SessionEventLike>): H
   return { task, last }
 }
 
+export interface HandoffStaleness {
+  stale: boolean
+  eventsAfter: number
+  lastWriteAtMs: number
+}
+
+/** UTC clock stamp used in stale-notes lines ("YYYY-MM-DD HH:MM UTC"). */
+function utcStamp(ms: number): string {
+  try { return new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' } catch { return '<unknown time>' }
+}
+
 /**
  * The handoff checkpoint text for one window switch, factored out so the
  * availability probe (src/state.ts) can price the SAME shape the engine would
@@ -125,13 +210,24 @@ export function deriveHandoffContext(events: ReadonlyArray<SessionEventLike>): H
  * does not price strictly smaller than the shadowed content, so "is a click
  * useful" is a token-mass comparison against exactly this template.
  */
-export function buildHandoffCheckpoint(generation: number, notesAssured: boolean, context?: HandoffContext): string {
-  const notesLine = notesAssured
-    ? 'Handoff: current goal, decisions, and next steps live in ctx_notes (read it first).'
-    : 'Handoff: this session has no ctx_notes yet — there is nothing to read there.'
-  const carryLine = notesAssured
-    ? "Continue the user's task from the notes; do not assume anything not written there."
-    : "Continue the user's task; reconstruct missing context via ctx_history (and any persisted project memory) before assuming it."
+export function buildHandoffCheckpoint(generation: number, notesAssured: boolean, context?: HandoffContext, staleness?: HandoffStaleness): string {
+  // Stale-notes gate (ISS-202609-00089191A): a notes channel that exists but
+  // predates the window's latest work must not be vouched for. The anchor
+  // downgrades from "read it first / assume nothing beyond it" to an explicit
+  // staleness warning that routes verification through ctx_history. Fresh or
+  // unknown freshness keeps the classic wording verbatim.
+  const stale = staleness?.stale === true
+  const stamp = stale && staleness ? utcStamp(staleness.lastWriteAtMs) : ''
+  const notesLine = !notesAssured
+    ? 'Handoff: this session has no ctx_notes yet — there is nothing to read there.'
+    : stale
+      ? `⚠️ Handoff notes are STALE: last ctx_notes write ${stamp}; ${staleness!.eventsAfter} activity event(s) happened after that in the archived window.`
+      : 'Handoff: current goal, decisions, and next steps live in ctx_notes (read it first).'
+  const carryLine = !notesAssured
+    ? "Continue the user's task; reconstruct missing context via ctx_history (and any persisted project memory) before assuming it."
+    : stale
+      ? `Do NOT treat the notes as current: reconcile with ctx_history search/read (and git / project memory) before continuing; the notes cover only up to ${stamp}.`
+      : "Continue the user's task from the notes; do not assume anything not written there."
   return [
     `${ROLLOVER_TEMPLATE_MARKER} Context window #${openedWindowNumber(generation)} opened.`,
     'The previous window was archived in full — nothing was summarized away or lost.',
@@ -143,6 +239,7 @@ export function buildHandoffCheckpoint(generation: number, notesAssured: boolean
     'The newest exchange remains visible in this window; the archive covers everything older (nothing was dropped).',
     ...(context?.task ? [`Task: ${context.task}`] : []),
     ...(context?.last ? [`Last action: ${context.last}`] : []),
+    ...(stale && context?.recent ? [`Mechanical activity after the last note: ${context.recent}.`] : []),
     notesLine,
     'Missing details: ctx_history search/read recalls exact original events on demand.',
     carryLine,
@@ -155,17 +252,21 @@ export function handoffCheckpointText(generation: number, notesAssured: boolean)
 }
 
 /**
- * The longest template the engine can ever frame: late window number, no-notes
- * wording, and both orientation lines at their hard caps. The availability
- * probe prices THIS, so its comparison always errs toward "inert" regardless
- * of what the real anchor ends up carrying.
+ * The longest template the engine can ever frame: late window number, both
+ * orientation lines at their hard caps, STALE-notes wording, and a full
+ * recent-activity tail of maxed entries. The availability probe prices THIS,
+ * so its comparison always errs toward "inert" regardless of what the real
+ * anchor ends up carrying (stale variant included).
  */
 export function handoffCheckpointWorstCaseText(): string {
   // CJK filler: per-char tokenization is the heavy end for this plugin's
   // content — an ASCII filler would merge into fewer tokens and could
   // underprice a real 80-char Chinese line.
   const filler = '汉'.repeat(HANDOFF_LINE_MAX)
-  return buildHandoffCheckpoint(98, false, { task: filler, last: filler })
+  // Tool names are ASCII; one char ≈ one token is the honest heavy end there.
+  const tailEntry = 'o'.repeat(ACTIVITY_ENTRY_MAX)
+  const recent = Array.from({ length: RECENT_ACTIVITY_MAX }, () => tailEntry).join(', ')
+  return buildHandoffCheckpoint(98, true, { task: filler, last: filler, recent }, { stale: true, eventsAfter: 99999, lastWriteAtMs: 0 })
 }
 /** Consecutive budget-measurement failures before the degraded signal fires. */
 const BUDGET_DEGRADED_AFTER = 5
@@ -285,21 +386,35 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     // an empty channel — say so and route reconstruction to ctx_history.
     const sessionId = typeof (agent.session as { id?: unknown }).id === 'string' ? (agent.session as { id: string }).id : null
     const notesAssured = sessionId === null || (await this.notesPresent(sessionId))
+    // Stale-notes gate: freshness is mechanical (segment stamp vs event time).
+    // Any probe hiccup degrades to null = freshness unknown = classic anchor.
+    let lastNoteAtMs: number | null = null
+    if (notesAssured && sessionId !== null && typeof this.rolloverCfg.lastNoteWrittenAt === 'function') {
+      try { lastNoteAtMs = await this.rolloverCfg.lastNoteWrittenAt(sessionId) } catch { lastNoteAtMs = null }
+    }
+    const freshness = deriveNotesFreshness(events, lastNoteAtMs)
     // Task orientation lines are mechanical (zero model calls) and hard-capped;
     // the availability probe prices their worst case, so the size invariant of
     // the compaction transaction is never surprised by them.
     const context = deriveHandoffContext(events)
+    // The activity tail exists ONLY to expose post-note work when the notes
+    // are stale (tool names + clocks — no arguments, no results). Sanitized
+    // like every authored surface, and priced by the worst-case template.
+    const recent = freshness.stale ? redactText(deriveRecentActivity(events, lastNoteAtMs)) : null
     // Mandatory sanitization (v0.5.0): the anchors are engine-authored and must
     // never carry personal/company information into the new window. The
     // verbatim archive stays untouched — authored surfaces only. Logs carry
     // counts and labels, never the matched content.
     const task = redactText(context.task)
     const last = redactText(context.last)
-    const redactionCount = task.redactions + last.redactions
+    const redactionCount = task.redactions + last.redactions + (recent?.redactions ?? 0)
     if (redactionCount > 0) {
-      this.rolloverCfg.logger.info(`dsh-smart-compact: handoff anchors sanitized — ${redactionCount} redaction(s) [${[...new Set([...task.labels, ...last.labels])].join(', ')}]`)
+      this.rolloverCfg.logger.info(`dsh-smart-compact: handoff anchors sanitized — ${redactionCount} redaction(s) [${[...new Set([...task.labels, ...last.labels, ...(recent?.labels ?? [])])].join(', ')}]`)
     }
-    const summary: ContentBlock[] = [{ type: 'text', text: buildHandoffCheckpoint(generation, notesAssured, { task: task.text, last: last.text }) }]
+    const staleness = freshness.stale && lastNoteAtMs !== null
+      ? { stale: true, eventsAfter: freshness.eventsAfter, lastWriteAtMs: lastNoteAtMs }
+      : undefined
+    const summary: ContentBlock[] = [{ type: 'text', text: buildHandoffCheckpoint(generation, notesAssured, { task: task.text, last: last.text, ...(recent ? { recent: recent.text } : {}) }, staleness) }]
     return {
       summary,
       provider: 'rollover-template',

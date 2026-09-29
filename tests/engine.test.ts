@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
-import { RolloverCompactionEngine, buildHandoffCheckpoint, deriveHandoffContext, handoffCheckpointWorstCaseText, HANDOFF_LINE_MAX, windowGeneration } from '../src/rollover.ts'
+import { RolloverCompactionEngine, buildHandoffCheckpoint, deriveHandoffContext, deriveNotesFreshness, deriveRecentActivity, handoffCheckpointWorstCaseText, HANDOFF_LINE_MAX, ACTIVITY_ENTRY_MAX, windowGeneration } from '../src/rollover.ts'
 import { consumeRollover, requestRollover } from '../src/new-context.ts'
 import type { CtxLike } from '../src/budget.ts'
 
@@ -45,7 +45,7 @@ function makeAgent(events: Array<{ seq: number; type: string }> = []) {
   }
 }
 
-function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbackBufferTokens?: number; auto?: boolean; hasNotes?: (sessionId: string) => Promise<boolean> }) {
+function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbackBufferTokens?: number; auto?: boolean; hasNotes?: (sessionId: string) => Promise<boolean>; lastNoteWrittenAt?: (sessionId: string) => Promise<number | null> }) {
   const pending = new WeakSet<object>()
   const cfg = {
     thresholdRatio: overrides?.thresholdRatio ?? 0.85,
@@ -55,6 +55,7 @@ function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbac
     onRolloverRefused: vi.fn(),
     onBudgetDegraded: vi.fn(),
     ...(overrides?.hasNotes ? { hasNotes: overrides.hasNotes } : {}),
+    ...(overrides?.lastNoteWrittenAt ? { lastNoteWrittenAt: overrides.lastNoteWrittenAt } : {}),
   }
   const engine = new RolloverCompactionEngine(ctx as never, { thresholdRatio: cfg.thresholdRatio, auto: cfg.auto }, cfg, pending)
   return { engine, pending, cfg }
@@ -390,5 +391,80 @@ describe('RolloverCompactionEngine.summarize — mandatory anchor sanitization (
     expect(text).toContain('【已脱敏:手机号】')
     expect(text).toContain('【已脱敏:邮箱】')
     expect(text).toContain('【已脱敏:企业名】')
+  })
+})
+
+describe('stale-notes gate (ISS-202609-00089191A: the anchor vouched for day-old notes)', () => {
+  const T0 = Date.parse('2026-09-28T03:01:00.000Z')
+  const content = (text: string) => ({ content: [{ type: 'text', text }] })
+
+  it('deriveNotesFreshness: activity after the note is stale; before it is fresh; missing stamp is unknown', () => {
+    const events = [
+      { seq: 1, type: 'user/message', time: T0 - 1000, data: content('early') },
+      { seq: 2, type: 'user/message', time: T0 + 60_000, data: content('commit landed') },
+      { seq: 3, type: 'user/message', time: T0 + 120_000, data: content('persist done') },
+    ]
+    expect(deriveNotesFreshness(events, T0)).toMatchObject({ stale: true, eventsAfter: 2 })
+    expect(deriveNotesFreshness(events, T0 + 200_000)).toMatchObject({ stale: false, eventsAfter: 0 })
+    expect(deriveNotesFreshness(events, null)).toMatchObject({ stale: false, eventsAfter: 0 })
+    const timeless = [{ seq: 1, type: 'user/message', data: content('no time') }]
+    expect(deriveNotesFreshness(timeless, T0)).toMatchObject({ stale: false, eventsAfter: 0 })
+  })
+
+  it('anchor downgrades to STALE wording with the mechanical activity tail; fresh keeps the classic wording', async () => {
+    const events = [
+      { seq: 1, type: 'user/message', time: T0 - 1000, data: content('early') },
+      { seq: 2, type: 'tool/call', time: T0 + 60_000, data: { name: 'bash', arguments: '{}' } },
+      { seq: 3, type: 'user/message', time: T0 + 120_000, data: content('persist done') },
+    ]
+    const stale = makeEngine(makeFakeCtx(0), { hasNotes: async () => true, lastNoteWrittenAt: async () => T0 })
+    const text = (await stale.engine.summarize({}, makeAgent(events) as never, undefined)).summary[0].text as string
+    expect(text).toContain('Handoff notes are STALE')
+    expect(text).toContain('2026-09-28 03:01 UTC')
+    expect(text).toContain('2 activity event(s)')
+    expect(text).toContain('Mechanical activity after the last note: bash@03:02')
+    expect(text).not.toContain('read it first')
+    expect(text).not.toContain('do not assume anything not written there')
+
+    const fresh = makeEngine(makeFakeCtx(0), { hasNotes: async () => true, lastNoteWrittenAt: async () => T0 + 300_000 })
+    const freshText = (await fresh.engine.summarize({}, makeAgent(events) as never, undefined)).summary[0].text as string
+    expect(freshText).toContain('live in ctx_notes')
+    expect(freshText).not.toContain('STALE')
+
+    const unknown = makeEngine(makeFakeCtx(0), { hasNotes: async () => true, lastNoteWrittenAt: async () => null })
+    const unknownText = (await unknown.engine.summarize({}, makeAgent(events) as never, undefined)).summary[0].text as string
+    expect(unknownText).toContain('live in ctx_notes')
+    expect(unknownText).not.toContain('STALE')
+  })
+
+  it('summarize keeps the classic anchor when the freshness probe throws', async () => {
+    const events = [{ seq: 1, type: 'user/message', time: T0 + 1000, data: content('x') }]
+    const throwing = makeEngine(makeFakeCtx(0), { hasNotes: async () => true, lastNoteWrittenAt: async () => { throw new Error('boom') } })
+    expect((await throwing.engine.summarize({}, makeAgent(events) as never, undefined)).summary[0].text).toContain('live in ctx_notes')
+  })
+
+  it('deriveRecentActivity: tool names and clocks only, newest last, capped', () => {
+    const events = [
+      { seq: 1, type: 'tool/call', time: T0 + 1000, data: { name: 'run_code', arguments: '{"code":"SECRET"}' } },
+      { seq: 2, type: 'tool/call', time: T0 + 2000, data: { name: 'edit', arguments: '{}' } },
+      { seq: 3, type: 'tool/call', time: T0 + 3000, data: { name: 'bash', arguments: '{}' } },
+      { seq: 4, type: 'tool/call', time: T0 + 4000, data: { name: 'read', arguments: '{}' } },
+    ]
+    const tail = deriveRecentActivity(events as never, T0)
+    expect(tail).toBe('edit@03:01, bash@03:01, read@03:01')
+    expect(tail).not.toContain('SECRET')
+  })
+
+  it('worst-case template still prices the STALE variant with a maxed activity tail', () => {
+    const filler = 'x'.repeat(HANDOFF_LINE_MAX)
+    const worst = handoffCheckpointWorstCaseText()
+    expect(worst).toContain('STALE')
+    expect(worst).toContain('Mechanical activity after the last note')
+    for (const recent of [undefined, 'bash@03:02', 'o'.repeat(ACTIVITY_ENTRY_MAX)]) {
+      for (const eventsAfter of [1, 99999]) {
+        const real = buildHandoffCheckpoint(98, true, { task: filler, last: filler, ...(recent ? { recent } : {}) }, { stale: true, eventsAfter, lastWriteAtMs: T0 })
+        expect(worst.length).toBeGreaterThanOrEqual(real.length)
+      }
+    }
   })
 })

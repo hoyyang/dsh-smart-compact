@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.2 — 2026-09-29
+
+### Added
+- **Stale-notes gate（笔记新鲜度门）**: at rollover time the engine compares the newest ctx_notes segment stamp against the durable log. When timestamped window activity postdates the notes, the handoff anchor downgrades from "read the notes first; assume nothing beyond them" to an explicit ⚠️ STALE warning (last-write time + number of activity events) plus a mechanical recent-activity tail (last ≤3 tool names + clocks — names only, never arguments/results), and the ✅ receipt carries the matching advisory line. Fresh or unknown-freshness notes keep the classic wording verbatim; every probe hiccup degrades, never fails.
+- `NotesStore.lastWrittenAtMs()` — in-band freshness anchor (the newest segment header stamp).
+- `deriveNotesFreshness()` / `deriveRecentActivity()` — zero-model mechanical helpers, exported for the command receipt and tests.
+
+### Context
+- Live incident (session "ISS-202609-00089191A 反馈"): a manual /smart-compact at ~3% budget usage succeeded while the notes predated the window's latest work (the actual code commit and the STATE persist) by ~4 hours — the anchor actively vouched for the stale notes and the new window nearly continued from wrong state. The 100% archive was never at risk; the risk was silent mis-direction. Manual rollovers can happen at any budget level, so threshold-driven note reminders never fire — the gate closes that gap mechanically.
+
+### Verified
+- 123/123 vitest (8 new: freshness verdicts, stale/fresh/unknown anchors, receipt advisory, activity-tail privacy, worst-case pricing still covers the STALE variant).
+- Real-data replay through the built lib: the incident-time stream (2707 events) + the real notes.md (segment 7, 02:12Z) now produces the STALE anchor with tail `read@06:18, write@06:18, bash@06:18` (exactly the work the old anchor failed to mention); with segment 8 present the classic anchor is kept.
+
 ## 0.5.1 — 2026-09-21
 
 ### Fixed

@@ -67,4 +67,15 @@ describe('NotesStore', () => {
     const store = new NotesStore('/proc/definitely/not/writable')
     await expect(store.write('s5', 'x')).rejects.toThrow(/cannot write notes for session s5/)
   })
+
+  it('lastWrittenAtMs returns the newest segment stamp; an empty store yields null', async () => {
+    const { store } = await makeStore()
+    expect(await store.lastWrittenAtMs('fresh-probe')).toBeNull()
+    await store.append('fresh-probe', 'first', 'a')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await store.append('fresh-probe', 'second', 'b')
+    const ms = await store.lastWrittenAtMs('fresh-probe')
+    expect(ms).not.toBeNull()
+    expect(Math.abs((ms as number) - Date.now())).toBeLessThan(10_000)
+  })
 })

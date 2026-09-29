@@ -110,6 +110,7 @@ export function apply(ctx: Context, config: unknown): void {
         },
         onBudgetDegraded: (failures) => writeState({ budgetDegraded: true, budgetConsecutiveFailures: failures }),
         hasNotes: (sessionId) => notes.hasNotes(sessionId),
+        lastNoteWrittenAt: (sessionId) => notes.lastWrittenAtMs(sessionId),
       },
       pending,
     )
@@ -147,6 +148,7 @@ export function apply(ctx: Context, config: unknown): void {
         try { return await measureBudget(engineCtx as never, agent as AgentLike) } catch { return null }
       },
       hasNotes: (sessionId) => notes.hasNotes(sessionId),
+      lastNoteWrittenAt: (sessionId) => notes.lastWrittenAtMs(sessionId),
     },
   )
 

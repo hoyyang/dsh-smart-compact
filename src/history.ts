@@ -13,6 +13,12 @@ export interface SessionEventLike {
   type: string
   /** Untyped payload: the host's event-data unions have no index signature. */
   data?: unknown
+  /**
+   * Epoch ms when the host logged the event (host SessionEvent.time —
+   * verified against the dsh >= 0.1.5-rc SessionEvent declaration). Optional:
+   * probes must degrade, not assume it.
+   */
+  time?: number
 }
 
 /**

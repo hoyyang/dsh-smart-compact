@@ -103,6 +103,20 @@ export class NotesStore {
     return (await this.readRaw(sessionId)) !== ''
   }
 
+  /**
+   * Epoch ms of the newest segment's header stamp (each append records an ISO
+   * stamp in-band), or null when there are no parseable segments. This is the
+   * freshness anchor for the stale-notes gate (ISS-202609-00089191A: the
+   * anchor vouched for notes that predated the session's latest work by a day).
+   */
+  async lastWrittenAtMs(sessionId: string): Promise<number | null> {
+    const segments = parseSegments(await this.readRaw(sessionId))
+    const last = segments.at(-1)
+    if (!last) return null
+    const ms = Date.parse(last.writtenAt)
+    return Number.isFinite(ms) ? ms : null
+  }
+
   /** Case-folded substring search across segments; returns segment headers plus matching lines. */
   async search(sessionId: string, keyword: string, maxTokens: number): Promise<string> {
     const needle = keyword.trim().toLowerCase()

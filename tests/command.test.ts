@@ -157,3 +157,39 @@ describe('/smart-compact — 100% lossless window switch', () => {
     expect(registered[0].name).toBe('smart-compact')
   })
 })
+
+describe('/smart-compact — stale-notes receipt advisory (ISS-202609-00089191A)', () => {
+  const T0 = Date.parse('2026-09-28T03:01:00.000Z')
+  const staleAgent = {
+    id: 'a1',
+    session: {
+      id: 'sess-1',
+      snapshotEvents: () => [
+        { seq: 1, type: 'user/message', time: T0 - 1000, data: { content: [{ type: 'text', text: 'early' }] } },
+        { seq: 2, type: 'tool/call', time: T0 + 60_000, data: { name: 'bash', arguments: '{}' } },
+      ],
+    },
+  }
+
+  it('appends the stale advisory when notes predate the latest window activity', async () => {
+    const deps = makeDeps({ hasNotes: async () => true, lastNoteWrittenAt: async () => T0 })
+    const out = await executeSmartCompact(deps, { ...invocation(), agent: staleAgent })
+    expect(out.kind).toBe('success')
+    expect(out.text).toContain('⚠️ 交接笔记滞后')
+    expect(out.text).toContain('2026-09-28 03:01 UTC')
+    expect(out.text).toContain('1 条活动事件')
+  })
+
+  it('omits the stale advisory when fresh, probe absent, or probe throws', async () => {
+    const fresh = await executeSmartCompact(makeDeps({ hasNotes: async () => true, lastNoteWrittenAt: async () => T0 + 120_000 }), { ...invocation(), agent: staleAgent })
+    expect(fresh.text).not.toContain('交接笔记滞后')
+    const noProbe = await executeSmartCompact(makeDeps({ hasNotes: async () => true }), { ...invocation(), agent: staleAgent })
+    expect(noProbe.text).not.toContain('交接笔记滞后')
+    const throwing = await executeSmartCompact(makeDeps({ hasNotes: async () => true, lastNoteWrittenAt: async () => { throw new Error('x') } }), { ...invocation(), agent: staleAgent })
+    expect(throwing.text).not.toContain('交接笔记滞后')
+    // A session without snapshotEvents must degrade, never fail the receipt.
+    const legacy = await executeSmartCompact(makeDeps({ hasNotes: async () => true, lastNoteWrittenAt: async () => T0 }), invocation())
+    expect(legacy.kind).toBe('success')
+    expect(legacy.text).not.toContain('交接笔记滞后')
+  })
+})

@@ -14,6 +14,8 @@
  * @module dsh-smart-compact/command
  */
 import { ManualCompactionError } from '@deepseek-ai/dsh-compaction'
+import { deriveNotesFreshness } from './rollover.js'
+import { sessionEvents, type SessionLogLike } from './history.js'
 import type { RolloverCompactionEngine } from './rollover.js'
 
 /** The slice of a compaction result the receipt renders. */
@@ -59,6 +61,8 @@ export interface SmartCompactDeps {
   measureRemaining?: (agent: unknown) => Promise<BudgetLike | null>
   /** Advisory notes probe; absent or throwing = the receipt omits the no-notes advisory line. */
   hasNotes?: (sessionId: string) => Promise<boolean>
+  /** Epoch ms of the newest notes write; feeds the stale-notes receipt line. Absent/throwing/null = line omitted. */
+  lastNoteWrittenAt?: (sessionId: string) => Promise<number | null>
 }
 
 const USAGE = '用法：/smart-compact（无需参数）'
@@ -125,12 +129,13 @@ async function remainingLine(deps: SmartCompactDeps, agent: unknown): Promise<st
  * volume) so GUI one-line truncation cannot hide them; the leading "\n"
  * makes the dispatching UI render the card expandable with the full text.
  */
-function successReceipt(result: SmartCompactOutcome, remaining: string | null, notesAdvisory: string | null): string {
+function successReceipt(result: SmartCompactOutcome, remaining: string | null, notesAdvisory: string | null, staleAdvisory: string | null): string {
   const windowNo = openedWindowNo(result)
   const head = `✅ 换窗完成：${windowNo ? `新窗口 #${windowNo}` : '新窗口已就绪'} · 归档 ${result.shadowedSeqs.length} 条 (~${formatTokens(result.shadowedTokenCount)} tok)`
   const body = [
     '旧窗口已 100% 机械归档（零模型调用、零摘要损耗）；细节用 ctx_history 逐字召回，工作笔记（若有）在 ctx_notes。',
     notesAdvisory,
+    staleAdvisory,
     remaining,
   ].filter((line): line is string => line !== null)
   return [head, ...body].join('\n')
@@ -149,6 +154,28 @@ async function missingNotesLine(deps: SmartCompactDeps, agent: unknown): Promise
   }
 }
 
+/**
+ * Advisory "stale notes" line — the receipt-side mirror of the anchor's ⚠️
+ * (ISS-202609-00089191A: the switch succeeded while the notes predated the
+ * window's latest work, and nothing in the receipt flagged it). Advisory only:
+ * any probe hiccup just drops the line.
+ */
+async function staleNotesLine(deps: SmartCompactDeps, agent: unknown): Promise<string | null> {
+  if (!deps.lastNoteWrittenAt) return null
+  try {
+    const sessionId = (agent as { session?: { id?: unknown } } | null | undefined)?.session?.id
+    if (typeof sessionId !== 'string') return null
+    const events = sessionEvents((agent as { session?: SessionLogLike }).session as SessionLogLike)
+    const lastNoteAtMs = await deps.lastNoteWrittenAt(sessionId)
+    const freshness = deriveNotesFreshness(events, lastNoteAtMs)
+    if (!freshness.stale) return null
+    const stamp = new Date(lastNoteAtMs ?? 0).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+    return `⚠️ 交接笔记滞后：最后一段笔记写于 ${stamp}，其后本窗口仍有 ${freshness.eventsAfter} 条活动事件；新窗口续接请先以 ctx_history 核对最新进度，勿直接信任笔记。`
+  } catch {
+    return null
+  }
+}
+
 /** Execute one argument-free smart-compact request (always a window switch). */
 export async function executeSmartCompact(deps: SmartCompactDeps, invocation: SmartCompactInvocation): Promise<CommandOutcome> {
   if (invocation.rawInput.trim().length > 0) return { kind: 'error', text: USAGE }
@@ -160,7 +187,7 @@ export async function executeSmartCompact(deps: SmartCompactDeps, invocation: Sm
     if (result === null) return { kind: 'error', text: '❌ 未执行换窗：当前对话还没有可归档的历史。' }
     return {
       kind: 'success',
-      text: successReceipt(result, await remainingLine(deps, invocation.agent), await missingNotesLine(deps, invocation.agent)),
+      text: successReceipt(result, await remainingLine(deps, invocation.agent), await missingNotesLine(deps, invocation.agent), await staleNotesLine(deps, invocation.agent)),
       sourceEventSeq: result.summarySeq,
     }
   } catch (error) {
