@@ -18,6 +18,49 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { SessionArchiveReader, eventText, sessionEvents, type SessionEventLike, type SessionLogLike } from './history.js'
 import { handoffCheckpointWorstCaseText } from './rollover.js'
 
+/** One session's last measurement, as mirrored into engine-state.json. */
+export interface SessionMeasure {
+  at: string
+  totalTokens?: number
+  contextWindow?: number
+  thresholdTokens?: number
+  usableWindow?: number
+  /** Why the automatic band skipped (below threshold / anti-churn floor). */
+  skipReason?: string
+  /** Why a switch that should have committed refused. */
+  refusal?: string
+}
+
+/** How many sessions the ledger keeps (newest last). */
+export const SESSION_LEDGER_LIMIT = 8
+
+/**
+ * Merge one session's measurement into the bounded ledger.
+ *
+ * The state file used to carry a single global lastMeasure/lastSkip slot, so
+ * whichever session wrote last erased every other session's evidence — on
+ * 2026-11-03 the android-pane session's 40 silent pressure evaluations were
+ * unrecoverable for exactly that reason. Newest entry stays last, oldest drop.
+ */
+export function mergeSessionLedger(
+  existing: Record<string, SessionMeasure> | undefined,
+  sessionId: string,
+  patch: Partial<SessionMeasure> & { at: string },
+  limit: number = SESSION_LEDGER_LIMIT,
+): Record<string, SessionMeasure> {
+  const next: Record<string, SessionMeasure> = { ...(existing ?? {}) }
+  const previous = next[sessionId]
+  // Undefined fields never overwrite what a previous write recorded, and a
+  // partial patch (a refusal without a fresh measurement) stays honest.
+  const merged = { ...previous, ...patch } as SessionMeasure
+  delete next[sessionId]
+  next[sessionId] = merged
+  const keys = Object.keys(next)
+  const overflow = keys.length - Math.max(1, limit)
+  for (const key of keys.slice(0, Math.max(0, overflow))) delete next[key]
+  return next
+}
+
 export interface WindowAvailability {
   /** Live window number (windows start at #1; ctx_history's "live window" numbering). */
   windowNo: number

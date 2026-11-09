@@ -6,7 +6,7 @@
 // window). Fixture event shapes match history.test.ts (both project through
 // the host's extractSessionEventText).
 import { describe, expect, it } from 'vitest'
-import { framedCheckpointTokenEstimate, windowAvailability } from '../src/state.js'
+import { framedCheckpointTokenEstimate, mergeSessionLedger, windowAvailability } from '../src/state.js'
 import type { PricedNodeLike } from '../src/state.js'
 import type { SessionEventLike } from '../src/history.js'
 
@@ -135,5 +135,35 @@ describe('framedCheckpointTokenEstimate', () => {
   it('falls back to a chars/4 heuristic without a meter (and never throws)', () => {
     const estimate = framedCheckpointTokenEstimate()
     expect(estimate).toBeGreaterThan(100)
+  })
+})
+
+describe('mergeSessionLedger — per-session engine evidence', () => {
+  it('keeps sessions apart and leaves the newest entry last', () => {
+    let ledger = mergeSessionLedger(undefined, 'session-a', { at: 't1', totalTokens: 136_173, contextWindow: 272_000, thresholdTokens: 135_808, usableWindow: 144_000 })
+    ledger = mergeSessionLedger(ledger, 'session-b', { at: 't2', totalTokens: 71_392, contextWindow: 1_000_000, thresholdTokens: 607_808, usableWindow: 616_000 })
+    expect(Object.keys(ledger)).toEqual(['session-a', 'session-b'])
+    expect(ledger['session-a']!.totalTokens).toBe(136_173) // a second session no longer erases the first
+    expect(ledger['session-b']!.contextWindow).toBe(1_000_000)
+  })
+
+  it('merges a skip reason into an existing measurement without losing the numbers', () => {
+    const first = mergeSessionLedger(undefined, 's', { at: 't1', totalTokens: 317_469, contextWindow: 272_000, thresholdTokens: 135_808, usableWindow: 144_000 })
+    const second = mergeSessionLedger(first, 's', { at: 't2', skipReason: 'only 58,165 tokens added since the last switch (< 100000)' })
+    expect(second['s']).toMatchObject({ at: 't2', totalTokens: 317_469, skipReason: 'only 58,165 tokens added since the last switch (< 100000)' })
+  })
+
+  it('records a refusal without inventing a measurement', () => {
+    const ledger = mergeSessionLedger(undefined, 's', { at: 't1', refusal: 'forced band: nothing compactable at 317469 tokens' })
+    expect(ledger['s']).toEqual({ at: 't1', refusal: 'forced band: nothing compactable at 317469 tokens' })
+    expect(ledger['s']!.totalTokens).toBeUndefined()
+  })
+
+  it('drops the oldest entry past the limit', () => {
+    let ledger: Record<string, { at: string }> | undefined
+    for (let index = 0; index < 10; index += 1) ledger = mergeSessionLedger(ledger, `s${index}`, { at: `t${index}` })
+    expect(Object.keys(ledger!)).toHaveLength(8)
+    expect(Object.keys(ledger!)[0]).toBe('s2')
+    expect(Object.keys(ledger!)[7]).toBe('s9')
   })
 })

@@ -37,23 +37,29 @@ function makeFakeCtx(totalTokens: number): FakeCtx {
   return fake
 }
 
-function makeAgent(events: Array<{ seq: number; type: string }> = []) {
+function makeAgent(events: Array<{ seq: number; type: string }> = [], maxTokens?: number) {
   return {
     // Host Session shape (dsh >= 0.1.5-rc): a durable-log snapshot, no `events`.
     session: { id: 'sess-1', seq: events.length, snapshotEvents: () => events },
-    options: { provider: 'test-provider', model: 'test-model' },
+    options: { provider: 'test-provider', model: 'test-model', ...(maxTokens === undefined ? {} : { maxTokens }) },
   }
 }
 
-function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; fallbackBufferTokens?: number; auto?: boolean; hasNotes?: (sessionId: string) => Promise<boolean>; lastNoteWrittenAt?: (sessionId: string) => Promise<number | null> }) {
+function makeEngine(ctx: FakeCtx, overrides?: { thresholdRatio?: number; thresholdFor?: (provider: string) => number; fallbackBufferTokens?: number; auto?: boolean; minAddedTokens?: number; onEvaluate?: (info: unknown) => void; onSkip?: (info: unknown) => void; onForeignCompaction?: (info: unknown) => void; hasNotes?: (sessionId: string) => Promise<boolean>; lastNoteWrittenAt?: (sessionId: string) => Promise<number | null> }) {
   const pending = new WeakSet<object>()
   const cfg = {
     thresholdRatio: overrides?.thresholdRatio ?? 0.85,
     fallbackBufferTokens: overrides?.fallbackBufferTokens ?? 1000,
     auto: overrides?.auto ?? true,
     logger: ctx.logger,
+    onRollover: vi.fn(),
     onRolloverRefused: vi.fn(),
     onBudgetDegraded: vi.fn(),
+    ...(overrides?.thresholdFor ? { thresholdFor: overrides.thresholdFor } : {}),
+    onEvaluate: overrides?.onEvaluate ?? vi.fn(),
+    onSkip: overrides?.onSkip ?? vi.fn(),
+    onForeignCompaction: overrides?.onForeignCompaction ?? vi.fn(),
+    ...(overrides?.minAddedTokens === undefined ? {} : { minAddedTokens: overrides.minAddedTokens }),
     ...(overrides?.hasNotes ? { hasNotes: overrides.hasNotes } : {}),
     ...(overrides?.lastNoteWrittenAt ? { lastNoteWrittenAt: overrides.lastNoteWrittenAt } : {}),
   }
@@ -189,6 +195,21 @@ describe('RolloverCompactionEngine.compactIfNeeded — three-band policy', () =>
     const agent = makeAgent()
     await engine.compactIfNeeded(agent as never, 'pressure', undefined)
     expect(superSpy).toHaveBeenCalledTimes(1)
+    // v0.5.7: auto switch == manual switch (zero retention), not basic's retained tail
+    expect(superSpy.mock.calls[0]?.[1]).toBe('context-overflow')
+    superSpy.mockRestore()
+  })
+
+  it('per-provider threshold: a 75% provider override forces at 80% usage where the 85% default stays quiet', async () => {
+    const ctx = makeFakeCtx(80_000) // 80% of 100k: past 75k+1k force line, below the 85k default
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded').mockResolvedValue({ shadowedSeqs: [0, 1] })
+    const kiro = makeEngine(ctx, { thresholdFor: (provider) => (provider === 'test-provider' ? 0.75 : 0.85) })
+    await kiro.engine.compactIfNeeded(makeAgent() as never, 'pressure', undefined)
+    expect(superSpy).toHaveBeenCalledTimes(1)
+    superSpy.mockClear()
+    const other = makeEngine(ctx, { thresholdFor: (provider) => (provider === 'kiro-vision' ? 0.75 : 0.85) })
+    await expect(other.engine.compactIfNeeded(makeAgent() as never, 'pressure', undefined)).resolves.toBeNull()
+    expect(superSpy).not.toHaveBeenCalled()
     superSpy.mockRestore()
   })
 
@@ -220,7 +241,7 @@ describe('RolloverCompactionEngine.compactIfNeeded — three-band policy', () =>
     await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
     expect(superSpy).toHaveBeenCalledTimes(2)
     expect(pending.has(agent.session)).toBe(true) // request survived the refusal (non-destructive probe)
-    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('nothing compactable') })
+    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('nothing compactable'), sessionId: 'sess-1' })
     // next step, SAME still-armed request: it forces again instead of being lost
     await engine.compactIfNeeded(agent as never, 'pressure', undefined)
     expect(superSpy).toHaveBeenCalledTimes(4)
@@ -238,7 +259,7 @@ describe('RolloverCompactionEngine.compactIfNeeded — three-band policy', () =>
     requestRollover(pending, agent as never)
     await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
     expect(consumeRollover(pending, agent.session)).toBe(true) // still pending for a later step
-    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('error: ') })
+    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('error: '), sessionId: 'sess-1' })
     superSpy.mockRestore()
   })
 
@@ -250,7 +271,7 @@ it('treats a non-Error rejection as an incident instead of crashing the step', a
     const agent = makeAgent()
     requestRollover(pending, agent as never)
     await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
-    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('plain string rejection') })
+    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('plain string rejection'), sessionId: 'sess-1' })
     expect(pending.has(agent.session)).toBe(true)
     superSpy.mockRestore()
   })
@@ -315,6 +336,109 @@ it('treats a non-Error rejection as an incident instead of crashing the step', a
     await engine.compactIfNeeded(agent as never, 'pressure', undefined)
     expect(superSpy).toHaveBeenCalledTimes(1)
     superSpy.mockRestore()
+  })
+})
+
+describe('reserve-aware trigger — the provider budget is an equation (v0.6.1)', () => {
+  it('fires at the usable wall (window - max_tokens), not at ratio * window', async () => {
+    // 100k window, 30k completion reserve -> the provider rejects above 70k input.
+    // 0.75 * 100k = 75k would wait past the wall; the reserve-aware trigger must not.
+    const ctx = makeFakeCtx(70_000)
+    const onSkip = vi.fn()
+    const { engine } = makeEngine(ctx, { thresholdRatio: 0.75, minAddedTokens: 0, onSkip, fallbackBufferTokens: 1_000 })
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue({ shadowedSeqs: [0, 1], shadowedTokenCount: 60_000 })
+    await engine.compactIfNeeded(makeAgent([], 30_000) as never, 'pressure', undefined)
+    expect(superSpy).toHaveBeenCalledTimes(1)
+    expect(onSkip).not.toHaveBeenCalledTimes(1)
+    superSpy.mockRestore()
+  })
+
+  it('without a reported reserve the percentage threshold is unchanged', async () => {
+    const ctx = makeFakeCtx(70_000) // 70% of 100k: below the 75% threshold
+    const { engine } = makeEngine(ctx, { thresholdRatio: 0.75, minAddedTokens: 0 })
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue({ shadowedSeqs: [0, 1] })
+    await engine.compactIfNeeded(makeAgent([]) as never, 'pressure', undefined)
+    expect(superSpy).not.toHaveBeenCalled()
+    superSpy.mockRestore()
+  })
+})
+
+describe('anti-churn guard — minAddedTokens (v0.6.0)', () => {
+  it('refuses an automatic switch until enough tokens were added since the last one', async () => {
+    const ctx = makeFakeCtx(80_000) // past the 75k threshold on a 100k window
+    const onSkip = vi.fn()
+    const { engine } = makeEngine(ctx, { thresholdRatio: 0.75, minAddedTokens: 100_000, onSkip })
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded').mockResolvedValue({ shadowedSeqs: [0] })
+    await expect(engine.compactIfNeeded(makeAgent() as never, 'pressure', undefined)).resolves.toBeNull()
+    expect(superSpy).not.toHaveBeenCalled()
+    expect(onSkip).toHaveBeenLastCalledWith(expect.objectContaining({ reason: expect.stringContaining('only 80000 tokens added') }))
+    superSpy.mockRestore()
+  })
+
+  it('after a committed switch, refuses an immediate re-switch on the same surface', async () => {
+    const ctx = makeFakeCtx(80_000)
+    const onSkip = vi.fn()
+    const { engine } = makeEngine(ctx, { thresholdRatio: 0.75, minAddedTokens: 5_000, onSkip })
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue({ shadowedSeqs: [0, 1], shadowedTokenCount: 1_000 })
+    const agent = makeAgent()
+    await engine.compactIfNeeded(agent as never, 'pressure', undefined)
+    expect(superSpy).toHaveBeenCalledTimes(1) // first switch commits (80k added >= 5k)
+    await engine.compactIfNeeded(agent as never, 'pressure', undefined)
+    expect(superSpy).toHaveBeenCalledTimes(1) // surface barely changed: guard blocks, no churn
+    expect(onSkip).toHaveBeenLastCalledWith(expect.objectContaining({ reason: expect.stringContaining('only 1000 tokens') }))
+    superSpy.mockRestore()
+  })
+
+  it('reports every evaluation (working state) even when the band stays quiet', async () => {
+    const ctx = makeFakeCtx(10_000)
+    const onEvaluate = vi.fn()
+    const onSkip = vi.fn()
+    const { engine } = makeEngine(ctx, { thresholdRatio: 0.75, onEvaluate, onSkip })
+    await engine.compactIfNeeded(makeAgent() as never, 'pressure', undefined)
+    expect(onEvaluate).not.toHaveBeenCalled() // quiet band: nothing to evaluate yet
+    expect(onSkip).toHaveBeenCalledWith(expect.objectContaining({ reason: 'below threshold', totalTokens: 10_000 }))
+  })
+})
+
+describe('foreign compaction detection — fail loud when another engine wins (v0.6.0)', () => {
+  function trackingAgent(events: Array<Record<string, unknown>>) {
+    return { session: { id: 'sess-1', seq: events.length, snapshotEvents: () => events }, options: { provider: 'test-provider', model: 'test-model' } }
+  }
+
+  it('adopts pre-existing history as the baseline, then reports each new foreign compaction', () => {
+    const onForeignCompaction = vi.fn()
+    const events: Array<Record<string, unknown>> = [
+      { seq: 1, type: 'compaction/summary', data: { summary: [{ type: 'text', text: '## Primary Request and Intent\nold window' }] } },
+    ]
+    const { engine } = makeEngine(makeFakeCtx(0), { onForeignCompaction })
+    const agent = trackingAgent(events)
+    engine.noticeForeignCompactions(agent as never) // baseline: nothing reported
+    expect(onForeignCompaction).not.toHaveBeenCalled()
+
+    events.push({ seq: 2, type: 'compaction/summary', time: 1_700_000_000_000, data: { summary: [{ type: 'text', text: '## Primary Request and Intent\nnew window' }] } })
+    engine.noticeForeignCompactions(agent as never)
+    expect(onForeignCompaction).toHaveBeenCalledTimes(1)
+    expect(onForeignCompaction).toHaveBeenCalledWith(expect.objectContaining({ count: 2, snippet: expect.stringContaining('## Primary Request and Intent') }))
+
+    // same foreign set again: no duplicate report
+    engine.noticeForeignCompactions(agent as never)
+    expect(onForeignCompaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('never reports our own template handoffs as foreign', () => {
+    const onForeignCompaction = vi.fn()
+    const events: Array<Record<string, unknown>> = [
+      { seq: 1, type: 'compaction/summary', data: { summary: [{ type: 'text', text: '[smart-compact rollover] Context window #2 opened.' }] } },
+    ]
+    const { engine } = makeEngine(makeFakeCtx(0), { onForeignCompaction })
+    const agent = trackingAgent(events)
+    engine.noticeForeignCompactions(agent as never) // baseline
+    events.push({ seq: 2, type: 'compaction/summary', data: { summary: [{ type: 'text', text: '[smart-compact rollover] Context window #3 opened.' }] } })
+    engine.noticeForeignCompactions(agent as never)
+    expect(onForeignCompaction).not.toHaveBeenCalled()
   })
 })
 
@@ -468,3 +592,83 @@ describe('stale-notes gate (incident 2026-09-29: the anchor vouched for day-old 
     }
   })
 })
+
+describe('silent-failure visibility (2026-11-03 diagnosis)', () => {
+  it('reports a forced-band refusal instead of returning null in silence', async () => {
+    const ctx = makeFakeCtx(90_000) // 90% of 100k: above 85k threshold and above the 86k force line
+    const { engine, cfg } = makeEngine(ctx)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue(null) // nothing compactable in the forced band
+    const agent = makeAgent()
+    await expect(engine.compactIfNeeded(agent as never, 'pressure', undefined)).resolves.toBeNull()
+    expect(cfg.onRolloverRefused).toHaveBeenCalledWith({ reason: expect.stringContaining('forced band: nothing compactable'), sessionId: 'sess-1' })
+    const warned = ctx.logger.warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('automatic switch refused'))
+    expect(warned).toHaveLength(1)
+    superSpy.mockRestore()
+  })
+
+  it('logs the anti-churn hold-back once per window instead of skipping silently', async () => {
+    const ctx = makeFakeCtx(90_000)
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue({ shadowedSeqs: [0, 1] })
+    const nowSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactNow: (...a: unknown[]) => unknown }, 'compactNow')
+      .mockResolvedValue({ shadowedSeqs: [0] })
+    const { engine, cfg } = makeEngine(ctx, { minAddedTokens: 100_000 })
+    const agent = makeAgent()
+    await engine.compactNow(agent as never, undefined, 'cmd-1') // resets the anti-churn baseline at 90k
+    await engine.compactIfNeeded(agent as never, 'pressure', undefined)
+    await engine.compactIfNeeded(agent as never, 'pressure', undefined)
+    expect(cfg.onSkip).toHaveBeenCalledTimes(2) // every evaluation still records a skip
+    const held = ctx.logger.info.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('automatic switch held back'))
+    expect(held).toHaveLength(1) // but the operator-facing log stays once per window
+    expect(held[0]).toContain('anti-churn floor')
+    superSpy.mockRestore()
+    nowSpy.mockRestore()
+  })
+})
+
+describe('rolloverForContinuation — the recovery path keeps the ops probe honest', () => {
+  it('switches losslessly and books the switch as "continuation", not "manual"', async () => {
+    const ctx = makeFakeCtx(90_000)
+    const nowSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactNow: (...a: unknown[]) => unknown }, 'compactNow')
+      .mockResolvedValue({ shadowedSeqs: [0, 1] })
+    const { engine, cfg } = makeEngine(ctx)
+    await expect(engine.rolloverForContinuation(makeAgent() as never)).resolves.toEqual({ shadowedSeqs: [0, 1] })
+    expect(cfg.onRollover).toHaveBeenCalledWith({ generation: 0, trigger: 'continuation' })
+    nowSpy.mockRestore()
+  })
+
+  it('books nothing when the engine finds nothing to archive', async () => {
+    const ctx = makeFakeCtx(90_000)
+    const nowSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactNow: (...a: unknown[]) => unknown }, 'compactNow')
+      .mockResolvedValue(null)
+    const { engine, cfg } = makeEngine(ctx)
+    await expect(engine.rolloverForContinuation(makeAgent() as never)).resolves.toBeNull()
+    expect(cfg.onRollover).not.toHaveBeenCalled()
+    nowSpy.mockRestore()
+  })
+})
+
+describe('anti-churn floor is capped to the band below the wall (v0.6.3)', () => {
+  it('lets the next automatic switch fire when baseline + 100k would overshoot the wall', async () => {
+    // 100k window with a 40k completion reserve -> 60k usable. A switch leaves a
+    // 50.5k baseline, so the absolute 100k floor would demand 150.5k > the wall
+    // (the mify-sol/azure shape: 50k + 100k > 144k). The cap frees the switch.
+    const ctx = makeFakeCtx(60_000)
+    const onSkip = vi.fn()
+    const { engine } = makeEngine(ctx, { thresholdRatio: 0.75, minAddedTokens: 100_000, onSkip, fallbackBufferTokens: 1_000 })
+    const superSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactIfNeeded: (...a: unknown[]) => unknown }, 'compactIfNeeded')
+      .mockResolvedValue({ shadowedSeqs: [0, 1] })
+    const nowSpy = vi.spyOn(BasicCompactionEngine.prototype as never as { compactNow: (...a: unknown[]) => unknown }, 'compactNow')
+      .mockResolvedValue({ shadowedSeqs: [0], shadowedTokenCount: 9_500 })
+    const agent = makeAgent([], 40_000)
+    await engine.compactNow(agent as never, undefined, 'cmd-1') // baseline = 60,000 - 9,500
+    await engine.compactIfNeeded(agent as never, 'pressure', undefined)
+    expect(superSpy).toHaveBeenCalledTimes(1)
+    expect((superSpy.mock.calls[0] as unknown[])[1]).toBe('context-overflow')
+    expect(onSkip).not.toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('anti-churn') }))
+    superSpy.mockRestore()
+    nowSpy.mockRestore()
+  })
+})
+

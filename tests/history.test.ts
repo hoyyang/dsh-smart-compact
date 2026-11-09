@@ -5,11 +5,11 @@ function eventsWithOneRollover(): SessionEventLike[] {
   return [
     // Shapes copied from a real session log: user/message carries top-level
     // content, assistant/message a message.content, tool/call name+arguments,
-    // tool/result a nested tool-result block.
+    // tool/result a v4 tool message (content blocks directly; the v3 tool-result wrapper is refused).
     { seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: 'fix the login bug, postgres migration is forbidden' }] } },
     { seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'working on it' }] } } },
     { seq: 2, type: 'tool/call', data: { name: 'bash', arguments: '{"command":"psql -c 1"}' } },
-    { seq: 3, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'psql: connected' }] }] } } },
+    { seq: 3, type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'call_1', content: [{ type: 'text', text: 'psql: connected' }] } } },
     { seq: 4, type: 'compaction/summary', data: { shadowedSeqs: [0, 1, 2, 3], shadowedRange: { start: 0, end: 3 }, shadowedTokenCount: 5400 } },
     { seq: 5, type: 'user/message', data: { message: { content: [{ type: 'text', text: 'continue' }] } } },
   ]
@@ -81,7 +81,7 @@ describe('SessionArchiveReader.readSeqs', () => {
 
   it('truncates output when a single body exceeds the token budget', () => {
     const big: SessionEventLike[] = [
-      { seq: 0, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'x'.repeat(40_000) }] }] } } },
+      { seq: 0, type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'call_1', content: [{ type: 'text', text: 'x'.repeat(40_000) }] } } },
       { seq: 1, type: 'compaction/summary', data: { shadowedSeqs: [0], shadowedRange: { start: 0, end: 0 }, shadowedTokenCount: 10_000 } },
     ]
     const reader = new SessionArchiveReader(big, 1024)
@@ -96,7 +96,7 @@ describe('eventText', () => {
     expect(eventText({ seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: 'hello' }] } })).toBe('hello')
     expect(eventText({ seq: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'working' }] } } })).toBe('working')
     expect(eventText({ seq: 2, type: 'tool/call', data: { name: 'bash', arguments: '{"a":1}' } })).toContain('bash')
-    const result = eventText({ seq: 3, type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'c1', content: [{ type: 'text', text: 'psql: connected' }] }] } } })
+    const result = eventText({ seq: 3, type: 'tool/result', data: { message: { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text: 'psql: connected' }] } } })
     expect(result).toBe('psql: connected')
   })
 

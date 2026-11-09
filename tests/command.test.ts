@@ -61,13 +61,13 @@ describe('/smart-compact — 100% lossless window switch', () => {
   })
 
   it('appends the remaining-budget line when the budget probe is wired', async () => {
-    const deps = makeDeps({ measureRemaining: async () => ({ totalTokens: 12_000, contextWindow: 100_000, remaining: 88_000 }) })
+    const deps = makeDeps({ prepareRemaining: async () => () => ({ totalTokens: 12_000, contextWindow: 100_000, remaining: 88_000 }) })
     const out = await executeSmartCompact(deps, invocation())
     expect(out.text).toContain('当前剩余预算：约 88%（88,000 / 100,000 tok）。')
   })
 
   it('drops the budget line when the probe fails (advisory only, never fails the receipt)', async () => {
-    const deps = makeDeps({ measureRemaining: async () => { throw new Error('no context window') } })
+    const deps = makeDeps({ prepareRemaining: async () => { throw new Error('no context window') } })
     const out = await executeSmartCompact(deps, invocation())
     expect(out.kind).toBe('success')
     expect(out.text).not.toContain('剩余预算')
@@ -136,6 +136,29 @@ describe('/smart-compact — 100% lossless window switch', () => {
     expect(out.kind).toBe('error')
     expect(out.text).toContain('❌ 换窗失败')
     expect(out.text).toContain('boom')
+  })
+
+  it('returns the success receipt in the same tick the switch commits (incident 2026-10-12: post-commit await let a host abort replace the receipt)', async () => {
+    const order: string[] = []
+    let committed = false
+    const deps = makeDeps({
+      engine: { compactNow: vi.fn(async () => { order.push('commit'); committed = true; return result }) },
+      prepareRemaining: async () => { order.push('prepare'); return () => { order.push('read'); expect(committed).toBe(true); return { totalTokens: 1_000, contextWindow: 100_000, remaining: 99_000 } } },
+      hasNotes: async () => { order.push('notes'); expect(committed).toBe(false); return false },
+      lastNoteWrittenAt: async () => { order.push('stale'); expect(committed).toBe(false); return null },
+    })
+    const out = await executeSmartCompact(deps, invocation())
+    expect(out.kind).toBe('success')
+    expect(out.text).toContain('当前剩余预算：约 99%')
+    expect(order.indexOf('commit')).toBeGreaterThan(Math.max(order.indexOf('prepare'), order.indexOf('notes')))
+    expect(order.at(-1)).toBe('read')
+    // No timer/IO await after the commit: a macrotask scheduled at commit
+    // time (the 2026-10-12 abort landed ~110 ms later) cannot precede settlement.
+    let timerFired = false
+    const timed = makeDeps({ engine: { compactNow: vi.fn(async () => { setTimeout(() => { timerFired = true }, 0); return result }) }, hasNotes: async () => false, prepareRemaining: async () => () => null })
+    const settled = await executeSmartCompact(timed, invocation())
+    expect(settled.kind).toBe('success')
+    expect(timerFired).toBe(false)
   })
 
   it('register wires the command and disposes in-flight handlers', async () => {

@@ -29,6 +29,7 @@ export type ReminderObservation =
   | { kind: 'briefed' }
   | { kind: 'tier'; label: string }
   | { kind: 'grace' }
+  | { kind: 'wall' }
   | { kind: 'no-budget' }
   | { kind: 'pass-failed'; reason: string }
 
@@ -43,6 +44,8 @@ export interface ReminderDeps {
    * (the engine's own log-only grace line had exactly that late-firing gap).
    */
   thresholdRatio: number
+  /** Per-provider threshold resolver; absent = thresholdRatio for every provider. */
+  thresholdFor?: (provider: string) => number
   /** Live budget, or null when the model/window is unknown. */
   getBudget(session: object): Promise<BudgetSnapshot | null>
   /** Current window generation (number of completed rollovers). */
@@ -77,6 +80,16 @@ export function tierNudge(usedFraction: number, label: string): string {
   return `[dsh-smart-compact] Context consumption reached ${label} (${Math.round(usedFraction * 100)}% used). If key constraints and next steps are not in ctx_notes yet, write them now — a fresh window opens near the top of the range.`
 }
 
+/**
+ * Past the usable wall the next request has no completion budget left: the
+ * model answers with reasoning only and the turn dies at the output cap with
+ * nothing visible (2026-11-03). Tell it to land the work and ask for a window
+ * switch itself — new_context is a zero-model-call rollover this plugin owns.
+ */
+export function wallNudge(totalTokens: number, usableWindow: number): string {
+  return `[dsh-smart-compact] The window is full: measured ${totalTokens} tokens exceed the ${usableWindow}-token ceiling this provider accepts (window minus reserved completion). The next answer gets no room and will be cut off with nothing visible. Land the current finding in your reply now, then call new_context at the next clean point (lossless switch, no model call).`
+}
+
 export function graceNudge(remaining: number): string {
   return `[dsh-smart-compact] LOW CONTEXT (${remaining} tokens remaining). Write your handoff state into ctx_notes NOW — goal, decisions, next steps, and where details live — before the automatic rollover.`
 }
@@ -94,6 +107,7 @@ export function attachReminder(
   const briefed = new WeakSet<object>()
   const tiersDone = new WeakMap<object, Set<string>>()
   const graceDone = new WeakMap<object, number>()
+  const wallDone = new WeakMap<object, number>()
   const noBudgetSeen = new WeakSet<object>()
   const observe = (observation: ReminderObservation): void => {
     try {
@@ -142,7 +156,20 @@ export function attachReminder(
         }
       }
       tiersDone.set(session, done)
-      if (budget.remaining <= deps.fallbackBufferTokens || usedFraction >= deps.thresholdRatio) {
+      const ratio = deps.thresholdFor?.(budget.provider) ?? deps.thresholdRatio
+      // Same equation as the engine band: the provider rejects once
+      // input + requested completion exceeds the window, so the grace nudge must
+      // honour the usable ceiling, not only the raw ratio.
+      const usableWall = budget.usableWindow ?? budget.contextWindow
+      if (budget.totalTokens >= usableWall) {
+        let generation = 0
+        try { generation = deps.getWindowGeneration(session) } catch { /* degrade to once per session */ }
+        if (wallDone.get(session) !== generation + 1) {
+          wallDone.set(session, generation + 1)
+          pieces.push(wallNudge(budget.totalTokens, usableWall))
+          observe({ kind: 'wall' })
+        }
+      } else if (budget.remaining <= deps.fallbackBufferTokens || usedFraction >= ratio || budget.totalTokens >= usableWall - deps.fallbackBufferTokens) {
         // Isolate the generation probe: a host that cannot count windows must
         // not take the briefing and the tier nudges down with it (they share
         // this try block). Degraded = the grace nudge fires once, with a warn.

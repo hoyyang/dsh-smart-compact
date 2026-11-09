@@ -5,3 +5,4 @@ lib/
 .backup-*/
 .plan-board/
 .sanitize-allow.json
+.DS_Store

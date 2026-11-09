@@ -57,8 +57,13 @@ export interface SmartCompactDeps {
   /** Name of the engine that owns the slot when yielded. */
   slotHolder?: string
   logger: { info(msg: string): void; warn(msg: string): void; debug(msg: string): void }
-  /** Advisory post-switch budget probe; absent or throwing = the receipt omits the remaining line. */
-  measureRemaining?: (agent: unknown) => Promise<BudgetLike | null>
+  /**
+   * Advisory budget probe, split in two so the receipt never awaits after the
+   * switch commits: the async half (model window lookup) runs BEFORE compactNow
+   * and returns a synchronous meter read for the post-switch window. Absent,
+   * throwing, or null = the receipt omits the remaining line.
+   */
+  prepareRemaining?: (agent: unknown) => Promise<(() => BudgetLike | null) | null>
   /** Advisory notes probe; absent or throwing = the receipt omits the no-notes advisory line. */
   hasNotes?: (sessionId: string) => Promise<boolean>
   /** Epoch ms of the newest notes write; feeds the stale-notes receipt line. Absent/throwing/null = line omitted. */
@@ -112,11 +117,19 @@ function openedWindowNo(result: SmartCompactOutcome): string | null {
   return null
 }
 
-/** Advisory "remaining budget" line; any hiccup just drops the line. */
-async function remainingLine(deps: SmartCompactDeps, agent: unknown): Promise<string | null> {
-  if (!deps.measureRemaining) return null
+/** Async half of the remaining-budget probe (pre-commit); any hiccup drops the line. */
+async function prepareRemainingLine(deps: SmartCompactDeps, agent: unknown): Promise<(() => string | null) | null> {
+  if (!deps.prepareRemaining) return null
   try {
-    const budget = await deps.measureRemaining(agent)
+    const read = await deps.prepareRemaining(agent)
+    return read === null ? null : () => remainingLine(read)
+  } catch { return null }
+}
+
+/** Synchronous "remaining budget" line read after the switch; any hiccup just drops the line. */
+function remainingLine(read: () => BudgetLike | null): string | null {
+  try {
+    const budget = read()
     if (!budget || !(budget.contextWindow > 0)) return null
     const pct = Math.round((budget.remaining / budget.contextWindow) * 100)
     return `当前剩余预算：约 ${pct}%（${formatTokens(budget.remaining)} / ${formatTokens(budget.contextWindow)} tok）。`
@@ -141,7 +154,7 @@ function successReceipt(result: SmartCompactOutcome, remaining: string | null, n
   return [head, ...body].join('\n')
 }
 
-/** Advisory "no notes" line; absent probe, missing session id, or any hiccup just drops the line. */
+/** Advisory "no notes" line (pre-commit); absent probe, missing session id, or any hiccup just drops the line. */
 async function missingNotesLine(deps: SmartCompactDeps, agent: unknown): Promise<string | null> {
   if (!deps.hasNotes) return null
   try {
@@ -155,7 +168,8 @@ async function missingNotesLine(deps: SmartCompactDeps, agent: unknown): Promise
 }
 
 /**
- * Advisory "stale notes" line — the receipt-side mirror of the anchor's ⚠️
+ * Advisory "stale notes" line (pre-commit: measured against the window being
+ * archived, before the checkpoint lands) — the receipt-side mirror of the anchor's ⚠️
  * (Incident 2026-09-29: the switch succeeded while the notes predated the
  * window's latest work, and nothing in the receipt flagged it). Advisory only:
  * any probe hiccup just drops the line.
@@ -182,12 +196,23 @@ export async function executeSmartCompact(deps: SmartCompactDeps, invocation: Sm
   if (!deps.engine) {
     return { kind: 'error', text: `❌ 未执行换窗：压缩槽位由 ${deps.slotHolder ?? '其它压缩引擎'} 持有，无损换窗不可用。释放槽位的方法见 README。` }
   }
+  // Incident 2026-10-12 ("This operation was aborted" on a committed switch):
+  // the advisory probes used to be awaited AFTER compactNow, leaving a ~110 ms
+  // window in which the host's command signal could abort and replace the
+  // receipt of an already-committed rollover with an error. Every async probe
+  // now runs before the switch; after compactNow the receipt is built
+  // synchronously and returned in the same tick.
+  const [readRemaining, notesAdvisory, staleAdvisory] = await Promise.all([
+    prepareRemainingLine(deps, invocation.agent),
+    missingNotesLine(deps, invocation.agent),
+    staleNotesLine(deps, invocation.agent),
+  ])
   try {
     const result = await deps.engine.compactNow(invocation.agent, invocation.signal, invocation.commandId)
     if (result === null) return { kind: 'error', text: '❌ 未执行换窗：当前对话还没有可归档的历史。' }
     return {
       kind: 'success',
-      text: successReceipt(result, await remainingLine(deps, invocation.agent), await missingNotesLine(deps, invocation.agent), await staleNotesLine(deps, invocation.agent)),
+      text: successReceipt(result, readRemaining?.() ?? null, notesAdvisory, staleAdvisory),
       sourceEventSeq: result.summarySeq,
     }
   } catch (error) {

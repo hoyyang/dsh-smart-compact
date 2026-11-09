@@ -19,7 +19,7 @@ function makeCtx(totalTokens = 0) {
   const effects: Array<() => void> = []
   const listeners = new Map<string, Array<(...args: unknown[]) => unknown>>()
   const ctx = {
-    logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     tools: {
       register: vi.fn((t: { name: string }) => {
         registered.push(t)
@@ -79,7 +79,10 @@ describe('measureBudget / resolveModelTarget', () => {
   it('returns total/window/remaining from meter + model info', async () => {
     const ctx = makeCtx(12_345).ctx
     const budget = await measureBudget(ctx, makeAgent() as never)
-    expect(budget).toEqual({ totalTokens: 12_345, contextWindow: 100_000, remaining: 87_655, baselineKind: 'estimated' })
+    expect(budget).toMatchObject({ totalTokens: 12_345, contextWindow: 100_000, remaining: 87_655, baselineKind: 'estimated', provider: 'p' })
+    // v0.6.1: the completion reservation (max_tokens) narrows the usable input ceiling.
+    expect(budget.completionReserve).toBe(0)
+    expect(budget.usableWindow).toBe(100_000)
   })
 
   it('fails loud when the model has no context window', async () => {
@@ -147,6 +150,32 @@ describe('apply() lifecycle', () => {
     expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("ctx.isolate('toolResultPruner') did not take effect"))
   })
 
+  it('the loaded kernel frames checkpoints with a v4 producer kind (not the retired "plugin" wrapper)', async () => {
+    const { compactCheckpointSource } = await import('@deepseek-ai/dsh-compaction')
+    expect((compactCheckpointSource as unknown as (id: string) => { kind: string })('x').kind).not.toBe('plugin')
+  })
+
+  it('refuses to mount the engine on a stale kernel whose checkpoints use kind "plugin"', async () => {
+    vi.resetModules()
+    vi.doMock('@deepseek-ai/dsh-compaction', async (orig) => ({
+      ...(await orig<object>()),
+      compactCheckpointSource: () => ({ kind: 'plugin', plugin: 'compact' }),
+    }))
+    try {
+      const fresh = (await import('../src/index.ts')).apply
+      const { ctx, registered, listeners } = makeCtx()
+      fresh(ctx, { notesDir: await notesDir(), auto: true })
+      expect(ctx.logger.error).toHaveBeenCalledWith(expect.stringContaining('rollover engine NOT mounted'))
+      expect(listeners.get('agent/pre-step')).toBeUndefined()
+      expect(registered.map((t) => t.name)).toContain('ctx_notes')
+      const probe = JSON.parse(await readFile(join(home, 'dsh-smart-compact', 'engine-state.json'), 'utf8'))
+      expect(probe).toMatchObject({ engineMounted: false, slotHolder: 'stale kernel' })
+    } finally {
+      vi.doUnmock('@deepseek-ai/dsh-compaction')
+      vi.resetModules()
+    }
+  })
+
   it('registers exactly four tools with auto=true and arms the engine', async () => {
     const { ctx, registered, listeners } = makeCtx()
     apply(ctx, { notesDir: await notesDir(), auto: true })
@@ -154,6 +183,25 @@ describe('apply() lifecycle', () => {
     expect(names).toEqual(['ctx_history', 'ctx_notes', 'get_context_remaining', 'new_context'])
     expect(listeners.get('agent/pre-step')?.length).toBe(1) // inherited from basic
     expect(listeners.get('system-prompt/assemble')?.length).toBe(1) // reminder
+  })
+
+  it('arms zero-output recovery with auto=true (one session/event listener)', async () => {
+    const { ctx, listeners } = makeCtx()
+    apply(ctx, { notesDir: await notesDir(), auto: true })
+    expect(listeners.get('session/event')?.length).toBe(1)
+    expect(ctx.logger.info).toHaveBeenCalledWith(expect.stringContaining('zero-output recovery armed'))
+  })
+
+  it('autoContinue=false registers no recovery listener (opt-out stays byte-identical)', async () => {
+    const { ctx, listeners } = makeCtx()
+    apply(ctx, { notesDir: await notesDir(), auto: true, autoContinue: false })
+    expect(listeners.get('session/event')).toBeUndefined()
+  })
+
+  it('auto=false registers no recovery listener either', async () => {
+    const { ctx, listeners } = makeCtx()
+    apply(ctx, { notesDir: await notesDir(), auto: false })
+    expect(listeners.get('session/event')).toBeUndefined()
   })
 
   it('auto=false omits new_context and the reminder waterfall', async () => {
@@ -197,3 +245,67 @@ describe('apply() lifecycle', () => {
     expect(ctx.logger.info).toHaveBeenCalledWith(expect.stringContaining('compaction slot occupied by GlmCompactionEngine'))
   })
 })
+
+describe('routed model truth — the request header wins over agent options (v0.6.3)', () => {
+  function agentWith(
+    header: { provider: string; model: string; maxTokens?: number } | undefined,
+    options: { provider?: string; model?: string; maxTokens?: number },
+  ) {
+    return {
+      session: {
+        id: 'sess-routed',
+        snapshotEvents: () => [],
+        ...(header === undefined ? {} : { requestHeader: () => ({ config: header }) }),
+      },
+      options,
+    }
+  }
+
+  it('follows the model the session is actually routed to, not the creation-time seed', () => {
+    // 2026-11-05: the agent was created on deepseek-flash (1M/384k) and the user
+    // switched to 微软 Azure gpt-6.1-sol (272k/128k); options stayed stale.
+    const agent = agentWith(
+      { provider: 'mify-sol', model: 'azure_openai/gpt-6.1-sol', maxTokens: 128_000 },
+      { provider: 'deepseek-official', model: 'deepseek/deepseek-flash', maxTokens: 384_000 },
+    )
+    expect(resolveModelTarget(agent as never)).toEqual({ provider: 'mify-sol', model: 'azure_openai/gpt-6.1-sol' })
+  })
+
+  it('falls back to agent options before the first request header exists', () => {
+    const agent = agentWith(undefined, { provider: 'deepseek-official', model: 'deepseek/deepseek-flash' })
+    expect(resolveModelTarget(agent as never)).toEqual({ provider: 'deepseek-official', model: 'deepseek/deepseek-flash' })
+  })
+
+  it("reserves the adapter's default maxTokens when no header or option carries one", async () => {
+    const ctx = makeCtx(10_000).ctx
+    ;(ctx.llm as unknown as { resolveModelInfo: () => Promise<unknown> }).resolveModelInfo = async () => ({ context: { contextWindow: 272_000 }, defaultMaxTokens: 128_000 })
+    const agent = agentWith(undefined, { provider: 'mify-sol', model: 'azure_openai/gpt-6.1-sol' })
+    const budget = await measureBudget(ctx, agent as never)
+    expect(budget.completionReserve).toBe(128_000)
+    expect(budget.usableWindow).toBe(144_000)
+    expect(budget.model).toBe('azure_openai/gpt-6.1-sol')
+  })
+
+  it('prefers the live header reservation over a stale creation-time maxTokens', async () => {
+    const ctx = makeCtx(10_000).ctx
+    ;(ctx.llm as unknown as { resolveModelInfo: () => Promise<unknown> }).resolveModelInfo = async () => ({ context: { contextWindow: 272_000 } })
+    const agent = agentWith(
+      { provider: 'mify-sol', model: 'azure_openai/gpt-6.1-sol', maxTokens: 128_000 },
+      { provider: 'deepseek-official', model: 'deepseek/deepseek-flash', maxTokens: 384_000 },
+    )
+    const budget = await measureBudget(ctx, agent as never)
+    expect(budget.completionReserve).toBe(128_000)
+    expect(budget.usableWindow).toBe(144_000)
+  })
+
+  it('prefers the live header reservation over the adapter default', async () => {
+    const ctx = makeCtx(10_000).ctx
+    ;(ctx.llm as unknown as { resolveModelInfo: () => Promise<unknown> }).resolveModelInfo = async () => ({ context: { contextWindow: 272_000 }, defaultMaxTokens: 64_000 })
+    const agent = agentWith(
+      { provider: 'mify-sol', model: 'azure_openai/gpt-6.1-sol', maxTokens: 128_000 },
+      { provider: 'mify-sol', model: 'azure_openai/gpt-6.1-sol' },
+    )
+    expect((await measureBudget(ctx, agent as never)).completionReserve).toBe(128_000)
+  })
+})
+

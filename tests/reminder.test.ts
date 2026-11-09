@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { attachReminder, BRIEFING, TIERS, tierNudge, graceNudge } from '../src/reminder.ts'
+import { attachReminder, BRIEFING, TIERS, tierNudge, graceNudge, wallNudge } from '../src/reminder.ts'
 import type { BudgetSnapshot } from '../src/budget.ts'
 
 interface Harness {
@@ -9,7 +9,7 @@ interface Harness {
   assemble(session: object | undefined, assembled?: Record<string, unknown>): Promise<Record<string, unknown>>
 }
 
-function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts?: { fallbackBufferTokens?: number; thresholdRatio?: number; getWindowGeneration?: () => number; onObservation?: (observation: unknown) => void }): Harness {
+function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts?: { fallbackBufferTokens?: number; thresholdRatio?: number; thresholdFor?: (provider: string) => number; getWindowGeneration?: () => number; onObservation?: (observation: unknown) => void }): Harness {
   const listeners = new Map<string, Array<(...args: unknown[]) => unknown>>()
   const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
   attachReminder(
@@ -17,6 +17,7 @@ function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts
     {
       fallbackBufferTokens: opts?.fallbackBufferTokens ?? 8192,
       thresholdRatio: opts?.thresholdRatio ?? 0.85,
+      ...(opts?.thresholdFor ? { thresholdFor: opts.thresholdFor } : {}),
       getBudget: async (session: object) => (session ? (typeof budgetSource === 'function' ? budgetSource() : budgetSource) : null),
       getWindowGeneration: opts?.getWindowGeneration ?? (() => 0),
       onObservation: opts?.onObservation,
@@ -33,7 +34,7 @@ function makeHarness(budgetSource: BudgetSnapshot | (() => BudgetSnapshot), opts
 }
 
 const session = { id: 's1' }
-const budget = (totalTokens: number, contextWindow = 100_000): BudgetSnapshot => ({ totalTokens, contextWindow, remaining: contextWindow - totalTokens, baselineKind: 'estimated' })
+const budget = (totalTokens: number, contextWindow = 100_000): BudgetSnapshot => ({ totalTokens, contextWindow, remaining: contextWindow - totalTokens, baselineKind: 'estimated', provider: 'kiro-vision' })
 
 describe('attachReminder — tiered budget awareness', () => {
   it('briefs the model on the very first assembled prompt only', async () => {
@@ -151,5 +152,51 @@ describe('attachReminder — pass observability (v0.5.0)', () => {
     await h2.assemble(session)
     expect(seen2.filter((o) => o.kind === 'no-budget').length).toBe(1)
     expect(seen.filter((o) => o.kind === 'no-budget').length).toBe(0)
+  })
+})
+
+describe('attachReminder — per-provider grace threshold', () => {
+  it('fires the grace nudge at the provider override (75%) before the 85% default', async () => {
+    const h = makeHarness(budget(78_000), { thresholdFor: (provider) => (provider === 'kiro-vision' ? 0.75 : 0.85) })
+    const out = await h.assemble(session)
+    expect(String(out.system)).toContain(graceNudge(22_000))
+    const plain = makeHarness(budget(78_000))
+    expect(String((await plain.assemble(session)).system)).not.toContain(graceNudge(22_000))
+  })
+})
+
+describe('attachReminder — the usable-wall nudge', () => {
+  const pastWall = (): BudgetSnapshot => ({
+    totalTokens: 317_469,
+    contextWindow: 272_000,
+    remaining: -45_469,
+    baselineKind: 'estimated',
+    provider: 'mify-sol',
+    completionReserve: 128_000,
+    usableWindow: 144_000,
+  })
+
+  it('names the equation and the lossless escape once per window', async () => {
+    const observations: string[] = []
+    const h = makeHarness(pastWall, { onObservation: (observation) => observations.push((observation as { kind: string }).kind) })
+    const first = await h.assemble(session)
+    expect(String(first.system)).toContain('exceed the 144000-token ceiling')
+    expect(String(first.system)).toContain('new_context')
+    const second = await h.assemble(session)
+    expect(String(second.system)).not.toContain('exceed the 144000-token ceiling') // once per window
+    expect(observations).toContain('wall')
+  })
+
+  it('does not fire below the wall (grace keeps its own wording)', async () => {
+    const belowWall = (): BudgetSnapshot => ({ ...pastWall(), totalTokens: 120_000, remaining: 24_000 })
+    const h = makeHarness(belowWall)
+    const assembled = await h.assemble(session)
+    expect(String(assembled.system)).not.toContain('ceiling')
+    expect(String(assembled.system)).toContain(graceNudge(24_000).slice(0, 40))
+  })
+
+  it('renders the numbers so the incident is auditable from the prompt alone', () => {
+    expect(wallNudge(317_469, 144_000)).toContain('317469')
+    expect(wallNudge(317_469, 144_000)).toContain('144000')
   })
 })

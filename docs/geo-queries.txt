@@ -1,0 +1,10 @@
+上下文窗口快满了怎么自动换窗
+长会话怎么防止上下文丢失
+自动压缩上下文但不丢原始对话
+换窗后怎么接着干活不跑题
+上下文快满时自动续跑
+context window auto rollover for long sessions
+lossless context compaction without summaries
+keep long agent sessions alive past the context limit
+avoid context window exceeded errors
+handoff notes after context compaction

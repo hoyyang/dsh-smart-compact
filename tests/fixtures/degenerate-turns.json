@@ -1,0 +1,266 @@
+{
+  "source": "session-761460d5-8bdb-42e7-a409-d4deb9f2354e",
+  "capturedAt": "2026-11-03T10:44:18Z",
+  "note": "Real events around three consecutive zero-output max-tokens turns (gpt-6.1-sol, 317k prompt on a 272k window). 2938 is the last healthy step; 2957/2969/2978 are reasoning-only answers with outputTokens=16. Turn 19 (seq 5511, totalTokens 330,860, 22:44 local — 7 minutes before 0.6.2 loaded) is a fourth occurrence, captured after the first diagnosis.",
+  "events": [
+    {
+      "seq": 2938,
+      "type": "assistant/message",
+      "data": {
+        "turn": 11,
+        "step": 46,
+        "message": {
+          "content": [
+            {
+              "type": "reasoning",
+              "text": ""
+            },
+            {
+              "type": "reasoning",
+              "text": ""
+            },
+            {
+              "type": "text",
+              "text": "真机已验证：拖动尚未松手时，设置列表已经移动；滚轮、持续长按、丢失指针捕获后的释放和关闭重开均正常。输入到画面变化的 5 次样本为 **335、19、37、19"
+            },
+            {
+              "type": "tool-call"
+            }
+          ]
+        },
+        "usage": {
+          "inputTokens": 3,
+          "outputTokens": 1727,
+          "totalTokens": 313233,
+          "cacheReadTokens": 308994,
+          "cacheWriteTokens": 2509
+        }
+      }
+    },
+    {
+      "seq": 2957,
+      "type": "assistant/message",
+      "data": {
+        "turn": 11,
+        "step": 47,
+        "message": {
+          "content": [
+            {
+              "type": "reasoning",
+              "text": ""
+            }
+          ]
+        },
+        "usage": {
+          "inputTokens": 3,
+          "outputTokens": 16,
+          "totalTokens": 317469,
+          "cacheReadTokens": 311503,
+          "cacheWriteTokens": 5947
+        }
+      }
+    },
+    {
+      "seq": 2960,
+      "type": "turn/end",
+      "data": {
+        "turn": 11,
+        "reason": {
+          "kind": "max-tokens"
+        }
+      }
+    },
+    {
+      "seq": 2969,
+      "type": "assistant/message",
+      "data": {
+        "turn": 12,
+        "step": 1,
+        "message": {
+          "content": [
+            {
+              "type": "reasoning",
+              "text": ""
+            }
+          ]
+        },
+        "usage": {
+          "inputTokens": 3,
+          "outputTokens": 16,
+          "totalTokens": 318280,
+          "cacheWriteTokens": 318261
+        }
+      }
+    },
+    {
+      "seq": 2971,
+      "type": "turn/end",
+      "data": {
+        "turn": 12,
+        "reason": {
+          "kind": "max-tokens"
+        }
+      }
+    },
+    {
+      "seq": 2978,
+      "type": "assistant/message",
+      "data": {
+        "turn": 13,
+        "step": 1,
+        "message": {
+          "content": [
+            {
+              "type": "reasoning",
+              "text": ""
+            }
+          ]
+        },
+        "usage": {
+          "inputTokens": 3,
+          "outputTokens": 16,
+          "totalTokens": 318851,
+          "cacheReadTokens": 318261,
+          "cacheWriteTokens": 571
+        }
+      }
+    },
+    {
+      "seq": 2980,
+      "type": "turn/end",
+      "data": {
+        "turn": 13,
+        "reason": {
+          "kind": "max-tokens"
+        }
+      }
+    },
+    {
+      "seq": 5511,
+      "type": "assistant/message",
+      "data": {
+        "turn": 19,
+        "step": 16,
+        "message": {
+          "content": [
+            {
+              "type": "reasoning"
+            }
+          ]
+        },
+        "usage": {
+          "inputTokens": 3,
+          "outputTokens": 16,
+          "totalTokens": 330860,
+          "cacheReadTokens": 321922,
+          "cacheWriteTokens": 8919
+        }
+      }
+    },
+    {
+      "seq": 5513,
+      "type": "turn/end",
+      "data": {
+        "turn": 19,
+        "reason": {
+          "kind": "max-tokens"
+        }
+      }
+    }
+  ],
+  "counterexamples": [
+    {
+      "name": "completed",
+      "event": {
+        "type": "turn/end",
+        "data": {
+          "turn": 9,
+          "reason": {
+            "kind": "completed"
+          }
+        }
+      },
+      "lastAssistant": {
+        "hasText": false,
+        "hasToolCall": false
+      }
+    },
+    {
+      "name": "error",
+      "event": {
+        "type": "turn/end",
+        "data": {
+          "turn": 9,
+          "reason": {
+            "kind": "error"
+          }
+        }
+      },
+      "lastAssistant": {
+        "hasText": false,
+        "hasToolCall": false
+      }
+    },
+    {
+      "name": "aborted",
+      "event": {
+        "type": "turn/end",
+        "data": {
+          "turn": 9,
+          "reason": {
+            "kind": "aborted"
+          }
+        }
+      },
+      "lastAssistant": {
+        "hasText": false,
+        "hasToolCall": false
+      }
+    },
+    {
+      "name": "max-tokens-with-text",
+      "event": {
+        "type": "turn/end",
+        "data": {
+          "turn": 9,
+          "reason": {
+            "kind": "max-tokens"
+          }
+        }
+      },
+      "lastAssistant": {
+        "hasText": true,
+        "hasToolCall": false
+      }
+    },
+    {
+      "name": "max-tokens-with-tool-call",
+      "event": {
+        "type": "turn/end",
+        "data": {
+          "turn": 9,
+          "reason": {
+            "kind": "max-tokens"
+          }
+        }
+      },
+      "lastAssistant": {
+        "hasText": false,
+        "hasToolCall": true
+      }
+    },
+    {
+      "name": "max-tokens-no-assistant",
+      "event": {
+        "type": "turn/end",
+        "data": {
+          "turn": 9,
+          "reason": {
+            "kind": "max-tokens"
+          }
+        }
+      },
+      "lastAssistant": null
+    }
+  ]
+}

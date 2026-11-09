@@ -2,193 +2,309 @@
 
 ![banner](assets/banner.svg)
 
-[![dsh-plugin](https://img.shields.io/badge/dsh-plugin-blue)](https://github.com/topics/dsh-plugin)
+**Give DeepSeek Harness a context window that manages itself: when the window fills up, roll over to a fresh one with zero model calls — the old window stays archived verbatim and readable line by line.**
+
+Lossless, zero-model context rollover for DeepSeek Harness: switch before the provider wall, archive the old window verbatim, and resume from notes instead of a degraded summary.
 
 [**中文**](README.md) · [Releases](https://github.com/hoyyang/dsh-smart-compact/releases) · [Changelog](CHANGELOG.md)
 
-**Codex-style context window auto-management for DeepSeek Harness.**
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-smart-compact"><img src="https://img.shields.io/npm/v/dsh-smart-compact" alt="npm version"></a>
+  <img src="https://img.shields.io/badge/dsh%E2%89%A50.1.5--rc-plugin-blue" alt="dsh version">
+  <img src="https://img.shields.io/badge/tests-184%20passed-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/license-BSD--3--Clause-green" alt="license">
+</p>
 
-Give the model Codex CLI's new context strategy: live budget visibility, wrap-up reminders, working notes that survive compaction, on-demand recall of archived original content, and a rollover compaction engine that switches to a fresh window with **zero summarization model calls**.
-
-## Install / Update
+## Install
 
 ```sh
 dsh plugin --profile web add dsh-smart-compact
-dsh plugin --profile web update dsh-smart-compact@latest
 ```
 
-**Works out of the box (zero configuration)**: every configuration key is optional and the defaults are the shipping behavior — it takes effect as soon as you start `dsh web` after installing, with no setup steps. No build step on the user side. Just start `dsh web` after installing.
+Alternative channel (GitHub source form; the npm name is the globally unique identifier, so prefer the command above): `dsh plugin --profile web add github:hoyyang/dsh-smart-compact`
 
-## Features
+**Works out of the box (zero configuration)**: every configuration key is optional and its default is the shipping behavior — it takes effect as soon as you start `dsh web` after installing. No build step on the user side. Requires dsh `>= 0.1.5-rc` (uses `Session.snapshotEvents()`).
 
-- **Zero-model-call rollover**: when the window nears its limit, the engine mechanically switches to a fresh window without invoking a summarization model even once — cheaper, and zero hallucination.
-- **100% lossless archiving**: the old window's content enters the local durable stream exactly as it was — not a "compressed summary"; recall it verbatim at any time.
-- **Handoff anchor**: the new window's first message carries task orientation (Task / Last action, two mechanically derived lines) — no more guessing "what was I just doing".
-- **Stale-notes gate (v0.5.2)**: when the handoff notes lag behind actual progress, the anchor auto-downgrades to a ⚠️ STALE warning plus a mechanical activity tail — it never endorses outdated state.
+Update: `dsh plugin --profile web update dsh-smart-compact@latest`
+
+## What you get
+
+- **Zero-model-call rollover**: when the window reaches the line, the engine mechanically switches to a fresh window without invoking a summarization model once — cheaper, zero hallucination, zero latency.
+- **100% lossless archiving**: the old window enters the local durable stream exactly as it was — not a compressed summary; recall it verbatim at any time.
+- **Handoff anchor**: the new window's first message carries `Task:` / `Last action:` orientation lines derived mechanically — no more guessing "what was I just doing".
+- **Stale-notes gate (v0.5.2)**: when the handoff notes lag behind actual progress, the anchor downgrades to a ⚠️ STALE warning plus a mechanical activity tail — it never endorses outdated state.
 - **Working notes ctx_notes**: write / append / read / search / list — five operations that survive compaction and window switches.
-- **Lossless recall ctx_history**: list the window inventory, read back precisely by seq, full-text search the archived content.
-- **Budget visibility get_context_remaining**: the current session's remaining token budget (total / window / remaining), queryable in real time.
-- **On-demand rollover new_context**: the model itself asks for a fresh window; it takes effect once the current step's sampling finishes — never mid-step.
-- **Human command /smart-compact**: one command rolls over immediately; the receipt is human-readable with ✅ success / ❌ failure prefixes — never a silent downgrade.
-- **One-click rollover button**: a 26px perfect-circle button in the composer tool row; one click equals running /smart-compact, with draft protection built in.
-- **Three-band automatic rollover**: quiet → grace reminder → forced auto-execution, host-event-driven, thresholds configurable.
-- **Mandatory sanitization**: anchor text auto-generated by the engine passes phone-number / email / national-ID / company-name sanitization; hits are logged as counts only, the original text never echoed.
-- **Observable reminder delivery**: delivery counts for the 25/50/75% + grace reminders are written into engine-state.json — silent reminder failure is finally traceable.
-- **Runtime probe**: engine-state.json shows the current mode, window number, rollover count, and latest failure reason at any time.
+- **Lossless recall ctx_history**: window inventory, precise read-back by seq, full-text search over archived content.
+- **Budget visibility get_context_remaining**: the session's total / window / remaining tokens, queryable in real time.
+- **On-demand rollover new_context**: the model asks for a fresh window; it takes effect once the current step's sampling finishes — never mid-step.
+- **Human command /smart-compact**: one command rolls over immediately; the receipt is human-readable with ✅ / ❌ prefixes — never a silent downgrade.
+- **One-click rollover button**: a 26px perfect-circle button in the composer tool row; one click equals `/smart-compact`, with draft protection built in.
+- **Three-band automatic rollover (v0.6.0)**: quiet → grace reminder → forced rollover, host-event-driven, threshold unified at 0.75 (with per-provider overrides).
+- **Budget-equation threshold (v0.6.1)**: trigger = min(ratio × window, usable wall − buffer), where the usable wall = window − completion reservation (max_tokens). It never waits past the provider wall.
+- **Zero-output truncation recovery (v0.6.2)**: a turn that ends `max-tokens` with neither text nor a tool call switches the window first and then continues — nobody has to type "continue".
+- **Routed-model truth (v0.6.3)**: the window follows the provider/model of the latest real request, so a mid-session model switch (deepseek → azure) no longer measures the old 1M window.
+- **Mandatory sanitization**: anchor text authored by the engine passes phone / email / national-ID / company-name sanitization; hits are logged as counts, never echoed.
+- **Observability**: engine-state.json records every rollover trigger, refusal reason, budget measurement, and a per-session evidence ledger (last 8 sessions).
 
 ## Quick start
 
 1. Install: `dsh plugin --profile web add dsh-smart-compact`.
-2. Start `dsh web` — the engine arms itself automatically (auto is on by default; nothing to set up).
-3. Open a session and work normally; the context meter to the right of the composer input updates live.
+2. Start `dsh web` — the engine arms itself automatically (auto is on by default; nothing to configure).
+3. Open a session and work normally; the context meter next to the composer input updates live.
 4. At 25 / 50 / 75% the model receives tiered reminders telling it to write handoff notes.
-5. At the 85% buffer band, the model receives the grace reminder: time to write ctx_notes.
-6. At any moment, click the gold round button next to the composer (or type /smart-compact) to roll over immediately.
-7. After the rollover, the new window's first message is the handoff anchor, stating the window number and the archived interval.
-8. In the new window, use ctx_notes read to continue the notes and ctx_history search to recall old details.
-9. Run `cat ~/.dsh/dsh-smart-compact/engine-state.json` anytime to check the running mode and rollover count.
+5. Above the trigger line and within trigger + 8192 tokens is the grace band: the model gets one "write ctx_notes now" reminder.
+6. Past the grace band the engine rolls over automatically — zero model calls, the exact same path as manual `/smart-compact`.
+7. After the rollover the new window's first message is the handoff anchor, naming the window number and the archived interval.
+8. In the new window, `ctx_notes read` continues the notes and `ctx_history search` recalls old details.
+9. Run `cat ~/.dsh/dsh-smart-compact/engine-state.json` anytime to check the mode, thresholds, and rollover count.
 10. Done with it: `dsh plugin --profile web remove dsh-smart-compact` — uninstall leaves nothing behind.
+
+## Usage
+
+- **Check the remaining budget**: ask the model "how much context is left" and it calls `get_context_remaining` for total / window / remaining.
+- **Roll over by hand**: type `/smart-compact` in the composer; the old window is archived and a fresh one opens, with the new window number and archive size on the receipt's first line.
+- **Roll over with the button**: click the gold circle in the composer tool row — identical to `/smart-compact`, and your unsent draft is restored verbatim.
+- **Write handoff notes**: have the model `ctx_notes write` the current task, the files already changed, and the next step — that is what it resumes from.
+- **Append a note section**: `ctx_notes append` adds a titled segment to the end of the notes without overwriting earlier content.
+- **Read the notes back**: `ctx_notes read` returns note segments — across windows and across sessions.
+- **List archived windows**: `ctx_history list` prints each window's seq range, event count, and estimated tokens, and marks the live window.
+- **Full-text search the archive**: `ctx_history search "error keyword"` scans every archived window and returns matching events with seqs.
+- **Read by seq**: `ctx_history read seqs=[12,13,14]` returns the original events verbatim.
+- **Let the model switch**: the model calls `new_context`; the switch happens right after the current step's sampling — good when the task has just wrapped up.
+- **Inspect runtime state**: `cat ~/.dsh/dsh-smart-compact/engine-state.json` shows the mode, thresholds, last measurement, and refusal reason.
+
+### Input and output
+
+Each pair below is real output from this machine (2026-09 / 2026-10 sessions), not an illustration:
+
+Input: `/smart-compact`
+Output: `✅ 已换窗 → 窗口 #2 · 归档 window #1（223 events / ~121k tokens）`
+
+Input: `ctx_history list`
+Output: `window #1: seqs 10–827 (223 events, ~121034 tokens archived) · live window: #2`
+
+Input: a committed rollover (any trigger)
+Output: the new window's first message: `[smart-compact rollover] Context window #2 opened. The previous window was archived in full`
+
+Input: `ctx_history search <term>`
+Output: 23 cross-window hits, each with its event seq and summary line
+
+Input: rollover while the notes lag behind
+Output: the anchor downgrades to `⚠️ STALE` with the notes timestamp and the activity count since
+
+Input: `ctx_notes read`
+Output: note segments returned in order, with their timestamps
+
+Input: `cat ~/.dsh/dsh-smart-compact/engine-state.json`
+Output: a JSON snapshot with `version`, `effectiveThresholds`, `functioning.lastMeasure`, and `functioning.sessions`
+
+Input: `node scripts/write-preset-overrides.mjs --verify`
+Output: on drift, the added/missing plugin rows and exit code 1; on a match, a quiet exit 0
 
 ## Use cases
 
 - **Long-session auto-extension**: an all-day coding session rolls over automatically as it fills up — the task never interrupts and no context is lost.
-- **Early manual rollover**: feel like the topic should wrap up? One click opens a fresh window without waiting for thresholds.
-- **Cross-session relay**: continue yesterday's session today — the new window picks up precisely from the anchor + notes, no scrolling through chat history.
-- **Incident-retrospective archaeology**: "how exactly was that error pinpointed last week" — ctx_history search reads the original events back verbatim by seq.
-- **Multi-window task orientation**: no "blind task continuation" after a switch — the anchor's Task line states the current task outright.
-- **Stale-notes protection**: rolled over manually before the notes were written? The anchor's ⚠️ STALE warning says so plainly — the new window verifies first, then works.
-- **Sensitive-data protection**: anchors are auto-sanitized for phone numbers / emails / national IDs / company names, so automatically propagating surfaces never leak personal information.
-- **Cost control**: zero summarization model calls and zero token cost per rollover; budget reminders help the model plan handoffs proactively.
-- **Multi-engine coexistence**: a single-slot deference mechanism coexists peacefully with other compaction engines such as dsh-glm / dsh-kiro.
-- **Operations observability**: the engine-state probe records each rollover's trigger source, refusal reasons, and budget-measurement status.
+- **Early manual rollover**: wrap up a topic on your own terms, one click, without waiting for thresholds.
+- **Cross-session relay**: continue yesterday's session today — the new window picks up from the anchor plus notes, no scrolling through chat history.
+- **Incident retrospective**: "how exactly was that error pinpointed last week" — `ctx_history search` reads the original events back by seq.
+- **Multi-window task orientation**: no blind continuation after a switch — the anchor's `Task:` line states the current task outright.
+- **Stale-notes protection**: rolled over before the notes were written? The ⚠️ STALE anchor says so; the new window verifies first.
+- **Sensitive-data protection**: anchors are sanitized for phone numbers / emails / national IDs / company names, so automatically propagated surfaces never leak personal data.
+- **Cost control**: zero summarization calls — a rollover costs zero tokens, and budget reminders let the model plan the handoff.
+- **Coexistence**: single-slot courtesy means it lives alongside the official compaction-basic, dsh-glm, and dsh-kiro.
+- **Ops observability**: the engine-state probe records triggers, refusal reasons, and budget measurement state — no guessing when something breaks.
 
-## Demo output
+## Output
 
-All of the following is real output captured on a real machine (a real session on this machine on 2026-09-29, plus a clean staging reinstall):
+- **Rollover receipt**: returns a ✅-prefixed Chinese receipt whose first line names the new window and the archived volume (`223 events / ~121k tokens`); tapping the card expands the post-switch budget.
+- **Handoff anchor**: generates the new window's first message `[smart-compact rollover] Context window #2 opened` plus the `Task:` and `Last action:` orientation lines.
+- **Window inventory**: `ctx_history list` outputs each window's seq range, event count, and estimated tokens, and marks the live one.
+- **Search hits**: `ctx_history search` outputs the matching events with their seqs and first-line summaries (23 hits measured across windows).
+- **Verbatim read-back**: `ctx_history read` outputs the original event bodies, identical to what was archived.
+- **Sanitization log**: writes `handoff anchors sanitized — 3 redaction(s)` — counts and categories only, never the original text.
+- **State snapshot**: `engine-state.json` outputs `version`, `effectiveThresholds`, and `functioning.lastMeasure` (provider, model, usableWindow, thresholdTokens).
+- **Failure receipt**: a failed `/smart-compact` outputs a ❌ line naming the underlying error (e.g. the slot is held), keeps the request pending, and never swallows it.
+- **Drift alarm**: `write-preset-overrides.mjs --verify` outputs the added/missing plugin rows on structural drift, exit code 1.
+- **Recovery record**: after a degenerate-turn switch the continuation message carries `source.kind = plugin:dsh-smart-compact` and the ledger records the `continuation` trigger.
 
-- Start of the handoff anchor the new window receives after a rollover: `[smart-compact rollover] Context window #2 opened. The previous window was archived in full — nothing was summarized away or lost.`
-- Manual rollover receipt (first line of the GUI card): `✅ 已换窗 → 窗口 #2 · 归档 window #1（223 events / ~121k tokens）`
-- `ctx_history list` output: `window #1: seqs 10–827 (223 events, ~121034 tokens archived) · live window: #2`
-- The anchor auto-downgrades when the notes are stale: `⚠️ STALE — 最后笔记 06:18Z 之后仍有 429 条活动；先 ctx_history 核对，勿直接信任笔记`
-- Sanitization log line: `handoff anchors sanitized — 3 redaction(s)` (only counts and categories are logged; the original text is never echoed)
-- The engine probe's live state is shown in the command output below.
+## When it fits
+
+- **Fits**: long-running sessions (coding, research, ops), agent workflows that regularly hit the context ceiling, teams with zero tolerance for summary distortion, anyone who wants rollovers that cost zero tokens.
+- **Fits**: PTC workflows that switch provider/model mid-session — 0.6.3 measures the window of the latest real request, so the switch takes effect on the next step.
+- **Does not fit**: light users who only occasionally run `/compact` — the host command is enough, and the plugin adds a layer.
+- **Does not fit**: semantic compression that rewrites the old conversation into a paragraph — this plugin archives mechanically and hands off through pointers.
+- **Does not fit**: fine-grained retention policies (keep tails by file path or tool type) — the plugin deliberately exposes only a few threshold keys.
+
+## Comparison
+
+| Capability | dsh-smart-compact 0.6.3 | Official dsh-compaction-basic | Host built-in /compact |
+|---|---|---|---|
+| Switch mechanism | Mechanical archive, zero model calls | LLM summary compaction | LLM summary compaction |
+| Old content readable verbatim | ✅ `ctx_history` read-by-seq | ❌ summary only, original events gone | ❌ same |
+| Rollover token cost | **0** | one summarization call | one summarization call |
+| Trigger line | min(ratio×window, window−max_tokens−buffer), default ratio 0.75 | fixed ratio (default 0.8) | manual |
+| Correct after a mid-session model switch | ✅ latest request header wins (0.6.3) | measured internally by the engine | n/a |
+| Task orientation for the new window | ✅ `Task:` / `Last action:` | none | none |
+| Stale-notes gate | ✅ ⚠️ STALE when notes lag | none | none |
+| Zero-output truncation recovery | ✅ switch first, then continue (0.6.2) | none (the turn just ends) | none |
+| Human entry point | `/smart-compact` + composer button | `/compact` | `/compact` |
+| Telemetry | engine-state.json + per-session ledger | host logs | none |
+
+Basis: the official engine's source (`@deepseek-ai/dsh-compaction-basic` summarizes through `llm.summarize`, pressure band defaults to 0.8) and this plugin's `src/rollover.ts` / `src/budget.ts`. Only measured differences are listed; where the other side is stronger, the cell stays factual.
+
+## Advanced
+
+### The /smart-compact command
+
+Opens a fresh window immediately and archives the old one losslessly (zero model calls). When the compaction slot is held by another engine the command **fails loudly** — it never silently degrades to a summary. The receipt's first line is short (GUI truncation), the card expands to the full text including the post-switch budget; failures carry a ❌ prefix. Anchor honesty (v0.3.2): if the session never wrote `ctx_notes` before the switch, the anchor downgrades to "recall with ctx_history" and the receipt says so.
+
+### The composer button (v0.4.5)
+
+A **26px perfect circle** (amber-gold vortex on a deep bronze plate) between the context meter and the send key. One click equals `/smart-compact`: it writes the command into the composer and submits through the host's own send path.
+
+- **Perfect circle**: geometry locked with `!important` plus a physical `clip-path: circle(50%)` crop, immune to the host's own important row-button rules.
+- **Draft safety**: unsent text is saved on click and restored verbatim after the command is captured.
+- **Semantic availability**: greyed out right after a switch (the fresh window has too little to archive), on a brand-new session, or while another engine holds the slot. The decision uses the same inequality as the engine (the archived range must price strictly above the handoff checkpoint). The host half serves it through `GET /dsh-smart-compact/state?sessionId=…`, which returns only the window number and an archivable flag — **no session content** — and is unregistered with the plugin fiber.
+- **Fail-open**: if the state route is unreachable the button stays clickable and the command receipt is the fallback.
+
+### The three automatic bands (v0.6.0 / v0.6.1 / v0.6.2)
+
+Automatic rollover is a host-event-driven path: the engine registers as the host compaction service and is called at every step boundary (`agent/pre-step`) and at the window-overflow recovery point (`context-overflow`).
+
+- **quiet**: below the trigger line — do nothing;
+- **grace**: trigger line to trigger + 8192 tokens — remind once to write notes, keep working (once per window generation);
+- **forced**: ≥ trigger + 8192 tokens — run exactly the same mechanical rollover as manual `/smart-compact`.
+
+The trigger is a **budget equation** (v0.6.1): `threshold = min(ratio × contextWindow, (contextWindow − completionReserve) − 8192)`. `completionReserve` comes from the latest request header's `max_tokens`, falling back to the adapter's `defaultMaxTokens`. Measured on this machine:
+
+| Route | Window | max_tokens | Usable wall | Threshold |
+|---|---:|---:|---:|---:|
+| deepseek-official/deepseek-flash | 1,000,000 | 384,000 | 616,000 | 607,808 |
+| azure_openai/gpt-6.1-sol | 272,000 | 128,000 | 144,000 | 135,808 |
+
+The anti-churn floor (v0.6.0, default 100,000 tokens) is capped on small windows to `min(configured, usable wall − post-switch baseline − buffer)`; otherwise a small window would lock itself out right after a switch and wait for the wall.
+
+### Racing the official engine (v0.6.0)
+
+The official `dsh-compaction-basic` defaults to `auto: true` with a 0.8 threshold and hangs off the same `agent/pre-step` — whoever crosses its line first wins, so this plugin must sit strictly below 0.8. The 0.85 of 0.5.x inevitably lost the race: all 6 automatic compactions in the 2026-10-23..25 ptc sessions were official LLM summaries.
+
+A dsh upgrade replaces the whole App-bundle `presets/*.patch.yml` (verified 2026-10-18, when an upgrade wiped a hand-added `auto: false`), so v0.6.0 moves the sole owner into the user layer that upgrades do not touch:
 
 ```sh
-$ dsh --profile web --dump-config | grep -A2 smart-compact
-# == dsh-smart-compact
-- id: dsh-smart-compact
-  name: dsh-smart-compact
+node scripts/write-preset-overrides.mjs            # dry run: print the preset override block
+node scripts/write-preset-overrides.mjs --apply    # back up the profile patch, then write (compaction-basic auto:false for ptc/standard/cordis)
+node scripts/write-preset-overrides.mjs --verify   # drift check: exit 1 when the preset structure changed
 ```
 
-```sh
-$ cat ~/.dsh/dsh-smart-compact/engine-state.json
-{"version":"0.5.2","engineMounted":true,"auto":true,"rolloverCount":1,
- "lastRolloverTrigger":"manual","budgetDegraded":false}
-```
+The override lands in `<dsh home>/profiles/web/cordis.patch.yml` and produces `preset-override.lock.json` (source preset sha256 + plugin id order). The cost is a pinned tree: if a dsh upgrade changes the preset plugin list, `--verify` names the added/missing rows and `--apply` re-pins. Roll back by restoring `cordis.patch.yml.bak-preset-override-*` and deleting the lock.
 
-```sh
-$ dsh plugin --profile web add dsh-smart-compact
-+ dsh-smart-compact@0.5.2 (public, prebuilt)
-Done in 1.6s using pnpm v11.22.0
-```
+Even without the override the engine never loses silently: a compaction summary not authored by this plugin is recorded in `functioning.foreignCompactions` with a warning.
 
-## Human command
+### Mandatory sanitization (v0.5.0, no switch)
 
-| Command | What it does |
-|---|---|
-| `/smart-compact` | **Triggers a seamless window switch 100% of the time**: opens a new window immediately and archives the old one losslessly (zero model calls); task continuity is carried by ctx_notes + ctx_history. If the compaction slot is held by another engine, the command errors loudly (fail loud) — it never silently degrades into summary compaction. Receipts are human-readable Chinese: success is prefixed ✅ with the new window number and the archived volume (short first line to survive GUI truncation; click the card to expand the full text, including the post-rollover budget); failures/aborts are prefixed ❌. **Honest handoff anchors (v0.3.2)**: if the session never wrote ctx_notes before the rollover, the new-window anchor automatically downgrades to ctx_history-recall mode (it no longer points at empty notes), and the receipt adds a ⚠️ hint — for important tasks, write notes before rolling over. |
+Engine-authored text — the anchor's `Task:` / `Last action:` lines — is sanitized before it enters the new window: phone numbers, emails, 18-digit national IDs, Chinese/English company names (suffix-based). Hits are logged as counts and categories (`handoff anchors sanitized — N redaction(s)`), never echoed. Boundary, on purpose: the verbatim `ctx_history` archive is **not** redacted — lossless local recall is the core contract; only automatically propagated surfaces are sanitized. Tests and docs use synthetic data only.
 
-## Composer button (v0.4.5)
+### Zero-output truncation recovery (v0.6.2)
 
-The composer tool row carries a **26px perfect-circle button** (amber-gold vortex on a deep bronze plate) right between the context meter and the send key. One click is equivalent to running `/smart-compact`: it writes the command into the composer and submits through the host's own send path, so adjudication, execution, and the receipt render exactly as if you had typed it.
+A turn that ends `max-tokens` while its assistant message carried neither text nor a tool call is an unusable answer (the whole completion budget went into reasoning). The host disarms the goal on that reason and nothing retries, so the session stops. The watcher switches the window first (zero model calls; it switches when the measurement is unavailable or at/above half the usable band), then continues through exactly one path: `goals.resume()` when an active goal was disarmed, otherwise one injected continuation message with `source.kind = plugin:dsh-smart-compact`. Guards: human sessions only, idle agent only, no queued messages, one recovery per turn, at most 2 consecutive (`maxConsecutiveRecoveries`), reset on a completed turn or a real user message.
 
-- **Perfect circle**: geometry is locked with `!important` and additionally clipped physically by **`clip-path: circle(50%)`** — even the host tool row's own `!important`-grade catch-all button styles cannot squash it (verified under adversarial overrides).
-- **Draft safety**: unsent text is auto-saved on click and restored verbatim once the command is captured (checked against the host input machine source: the bare-token clear only fires when the draft is exactly the command).
-- **Motion**: hover glow plus a faster vortex spin; a click fires a gold burst and a fast roll; honors `prefers-reduced-motion`.
-- **Tooltip**: concise Chinese, state-aware (the command name stays English) — clickable: 「一键换窗 = /smart-compact（归档本窗口、开新窗，草稿保留）」; right after a rollover: 「窗口 #N 刚开、暂无可归档历史；发送下一条消息后可再次换窗」; slot held: 「换窗不可用：压缩槽位由 XX 持有」.
-- **Semantic availability (v0.4.5)**: right after a rollover (the new window holds too little content), on a brand-new session with no history, or while the compaction slot is held by another engine, the button **greys out and cannot be clicked** (no hover glow, clicks do nothing); it re-enables automatically once enough content has accumulated. The decision uses the **same inequality as the compaction engine**: the host-meter price of the manual-rollover archive interval (retain=0, and **never including the newest surface node**) must be strictly greater than the handoff checkpoint estimate, otherwise the engine refuses with "summary is not smaller than the shadowed content" (v0.4.3 measured three consecutive red no-op receipts in a dsh-android-pane session: `215 ≥ 193` — this release closes the loop: the button greys out in exactly that state, and the receipt now carries honest numbers). The check is served by the host half over a same-origin webServer route, `GET /dsh-smart-compact/state?sessionId=…` (it returns only the window number and an archivable boolean, **no session content**; the route registers with the plugin fiber, so unmounting removes it). When the state is unreachable (route missing / fetch fails), the button falls back to **always clickable** (fail-open), and the command receipt is the safety net.
-- **No new tool registrations**: the button adds no tools and does not touch the command surface; apart from the read-only state route above, the client depends only on the official slots service.
-- **Regenerating the texture**: generate with dsh-image-gen (image-prompt `brand-identity-package` template, gold palette on pure black) → sips crop 700→128 JPEG → inline into `src/client/assets.ts`, overlaid inside the button with `mix-blend-mode: screen` (the black floor vanishes into the plate).
+### Routed-model truth: the latest real request (v0.6.3)
 
-## Automatic rollover (on by default)
+Window and completion reservation are resolved from `session.requestHeader()`; `agent.options` (the seed model captured at creation) is the fallback before the first request. Reason: the model selector rewrites the header on every request while options never update — a PTC session created on deepseek and switched to azure was still measured as a 1M window, so a 607,808 threshold never met the 144,000 wall, the provider clamped the completion to ~16 tokens, and the turn died with nothing visible (407k prompt measured on 2026-11-06).
 
-Automatic rollover is not an appendage of the button but an independent, **host-event-driven** path: the compaction engine registers as the host compaction service, and the host calls `compactIfNeeded` at every step boundary (`agent/pre-step`) and at model window-overflow recovery points (`context-overflow`). A three-band strategy escalates automatically:
+### Configuration (config.toml → plugin config)
 
-- **quiet** (consumption < 85%): do nothing;
-- **grace** (85% ~ 85%+8192 tok): remind once (write ctx_notes) and keep working;
-- **forced** (≥ 85%+8192 tok): automatically run the **exact same** mechanical rollover as manual `/smart-compact` — zero model calls; the first message of the new window is the handoff anchor (`Context window #N opened`), and the GUI's "context compacted" banner still renders, but its content is a lossless rollover rather than an AI summary.
-
-The automatic path is host-event-driven (`agent/pre-step` pressure check + window-overflow recovery) and escalates quiet → grace → forced rollover — all zero-model via the template summarizer override.
-
-Reminders (25/50/75% + grace) reach the model context through system-prompt waterfall injection; since v0.5.0 their delivery (briefing/tier/grace counts and budget-measurement failures) is recorded in `engine-state.json` as `reminderObserved` — silent reminder failure is now observable (in the 0.4.x era, a hot session once received zero reminders and was finally rescued by the host's AI-summary fallback).
-
-## Sanitization (v0.5.0, no switch)
-
-Text **auto-generated** by the engine — the `Task:` / `Last action:` lines of the handoff anchor — is mandatorily sanitized before it enters a new window: phone numbers, emails, 18-digit national IDs, and company names (Chinese or English, detected by suffix). Hits are logged only as **counts and categories** (`handoff anchors sanitized — N redaction(s)`); the original text is never echoed.
-
-Boundary (deliberate): the verbatim `ctx_history` archive is **not** sanitized — lossless recall of local sessions is the product's core contract; sanitization covers only engine-generated surfaces that propagate automatically. Tests and doc samples use synthetic data only (张三 / 138****8000 / example.com / 示例公司).
-
-Engine-authored surfaces (the orientation anchors) are mandatorily sanitized before entering a new window — phone / email / national-ID / company-name patterns, counts logged, content never echoed. The verbatim archive stays untouched on purpose (lossless local recall is the core contract).
-
-## How rollover works (in plain language)
-
-When the context nears its limit (85% of the default window), instead of "compressing the old conversation into a summary", the engine: first archives the old window **verbatim** (the session's existing durable event stream — zero new storage) → leaves an 8192-token buffer for the model to write handoff notes → then opens a clean new window holding only a fixed template ("the old window has been fully archived; current state is in ctx_notes; check details with ctx_history"). The whole run **never calls a summarization model once**; old content stays lossless and can be read back precisely at any time.
-
-The anchor template is generated from the actual notes state: if the session has written ctx_notes → point at the notes ("continue from the notes"); if it never has → state explicitly "this session has no notes so far" and instruct to rebuild context with ctx_history (plus any persisted project memory/STATE) — never pointing at an empty notes channel (v0.3.2 fix for the problem where manual rollovers ran without notes and the template unconditionally pointed at the notes channel, sending the new window on an archaeology dig).
-
-The anchor carries task-orientation lines (v0.4.6): the template appends two **mechanically derived** lines (zero model calls, hard length caps) — `Task:` (from the latest session title) and `Last action:` (first line of the newest content event) — plus an explicit "the newest message still lives in this window; the archive covers everything else". The former eliminates blind task continuation (the new window no longer has to guess what this session is doing); the latter prevents misreading a sparse seq range in the archive interval as "the wrap-up report got lost". The availability probe prices both lines at their worst-case fixed lengths, so the compaction transaction's hard inequality — the checkpoint must be smaller than the content to be archived — is unaffected. The write-notes grace reminder now fires when consumption reaches the engine's grace band (`thresholdRatio`, default 85%) instead of waiting until only a few thousand tokens remain — a nudge that late arrives when there is no room to act on it.
-
-Stale-notes gate (v0.5.2): at rollover time the engine reconciles the newest notes segment stamp against the durable log. If window activity postdates the notes (necessarily true for early manual rollovers: the write-notes mechanism is driven by budget thresholds and never overrides "the user may roll over manually at any time"), the anchor no longer unconditionally endorses the notes — it downgrades to a ⚠️ STALE warning (time of the last notes segment plus the number of activity events after it) plus a **mechanical recent-activity tail** (the last ≤3 tool names + clocks; names only, never arguments/results), and the ✅ receipt appends a matching "handoff notes are stale" advisory line. When the notes are fresh or freshness cannot be determined, the classic anchor wording stays verbatim; any probe failure degrades to omission, never failure (proven by a real incident: the rollover succeeded but the notes were 4 hours stale, and the old anchor actively led the new window to trust outdated state).
-
-Window numbering: `Context window #N` in the handoff header is the **session window index** (the first window = #1) — the same numbering as the `window #N` printed by `ctx_history list`; list additionally prints `live window: #N` for the current window.
-
-Window numbering is the session-window index: the handoff header's `Context window #N` and `ctx_history`'s `window #N` are the same numbering, and `ctx_history list` also prints the live window number. The count is the session log's `compaction/summary` events, so summaries written by another engine (or inherited from a fork parent) are counted too — the header and the list always agree because they read the same set.
-
-When the context approaches its limit (85% by default), the engine does not write an LLM summary. Instead it archives the old window intact (the session's existing durable event stream — no new storage), grants a 8192-token grace band for the model to write handoff notes, then opens a fresh window whose anchor is a fixed template pointing at `ctx_notes` and `ctx_history`. Zero summarization calls; nothing is lost.
-
-## Configuration (config.toml → plugin config)
-
-All keys are **optional** — the defaults are the shipping behavior (works out of the box):
+Every key is optional; the default is the shipping behavior:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `true` | Master switch; when false the plugin is fully silent |
-| `auto` | `true` | Automatic rollover + reminders + new_context; when false, only manual /compact routes through rollover |
-| `thresholdRatio` | `0.85` | Window-occupancy ratio at which the buffer band is entered |
-| `retainRatio` | `0.16` (engine default) | Share of recent context kept after rollover; must be smaller than `thresholdRatio` |
-| `fallbackBufferTokens` | `8192` | Buffer band width; exceeding it forces rollover |
-| `maxToolOutputTokens` | `8192` | Truncation cap for a single tool output |
-| `notesDir` | `<dsh home>/dsh-smart-compact/notes` | Notes storage directory |
+| `enabled` | `true` | master switch; false keeps the plugin completely quiet |
+| `auto` | `true` | automatic rollover + reminders + new_context; false leaves only manual `/smart-compact` |
+| `thresholdRatio` | `0.75` | automatic trigger ratio; must stay below the official engine's 0.8 |
+| `minAddedTokens` | `100000` | anti-churn floor: no switch until this many tokens were added; `0` disables |
+| `autoContinue` | `true` | zero-output truncation recovery |
+| `maxConsecutiveRecoveries` | `2` | consecutive recoveries per session (1–5) |
+| `providerThresholds` | `{ "kiro-vision": 0.75 }` | per-provider ratio override; `{}` = global |
+| `fallbackBufferTokens` | `8192` | grace band width |
+| `maxToolOutputTokens` | `8192` | per-tool-output truncation cap |
+| `notesDir` | `<dsh home>/dsh-smart-compact/notes` | notes directory |
+| `retainRatio` | `0.16` (engine default) | config validation only; since 0.5.7 a rollover keeps just the latest round |
 
-## Compatibility
+### Observability (engine-state.json)
 
-- **Single-slot first**: the `compaction` service is a single slot — after installation this plugin **takes over** that slot by default (rollover semantics) and must sit **before** the other compaction engines (dsh-glm / dsh-kiro / compaction-basic) in the profile bundles. Engines that yield the slot (e.g. dsh-glm) skip mounting automatically via their built-in deference check; their remaining features are unaffected. Confirm the current mode with the state probe: `cat <dsh home>/dsh-smart-compact/engine-state.json` (`engineMounted: true` = rollover took over; `false` = the slot is held by another engine and this plugin provides tools and reminders only). The probe also records **automatic and manual** rollovers: every successful rollover (auto threshold or manual `/smart-compact`) increments `rolloverCount` and writes `lastRolloverAt`, and `lastRolloverTrigger` is one of `new_context` / `pressure` / `manual` / `context-overflow`.
-- The only command entry is `/smart-compact`: the profile's official `command-compact` (`/compact`) stays `disabled` — avoiding the path where `/compact` silently degrades into summary compaction while the slot is held by another engine, which would conflict with the lossless promise.
-- **Requires dsh >= 0.1.5-rc**: session logs are read via `Session.snapshotEvents()` (`Session.events` was removed upstream before 0.1.5); if the host does not provide that API the plugin errors by name — it never goes silently amnesiac.
-- **Isolation from third-party `toolResultPruner`**: that service is an optional third-party implementation that can lag behind dsh (a stale copy observed in the wild still read `session.events`, long removed upstream, and broke **every** rollover inside basic compaction). Because rollover archives the whole window mechanically and retention is decided by interval selection, upfront pruning has no benefit here — the engine therefore runs on a child context from `ctx.isolate('toolResultPruner')` and never consults that service. Cost: the manual `/smart-compact` path likewise performs no upfront pruning (it could only converge smaller when the window genuinely needs compaction). On apply, the engine self-checks that the isolation took effect and logs a warning if it did not.
-- **Rollover requests are never silently swallowed**: a `new_context` request is consumed only when the rollover **actually commits**; when refused (no compressible interval) or on an engine error, the request stays in the pending set and is retried at each step, with the latest reason written to the probe (`lastRolloverRefusedAt` / `lastRolloverRefusedReason`; same-reason writes merge within 30s). An aborted step does not count as a refusal: the request stays pending and no ops event is recorded. An unmeasurable budget (e.g. the model has no `contextWindow` configured) is accounted separately from rollover failures; five consecutive occurrences trigger `budgetDegraded`.
-- Peer deps track the dsh major version (currently `>=0.1.5-rc <2`). The plugin's bundled `node_modules` copy is the **real runtime resolution target** (the plugin's realpath is not on the host's `node_modules` resolution chain), so **after every dsh upgrade you must rerun `npm install` and rebuild `lib/`** — otherwise the old core API keeps being loaded.
-- **Host token-meter tolerance patch (since v0.5.1, one-time)**: a host restore/remount can reset the turn count while an old step is still unfinished, corrupting the session's durable stream — meter replay then throws forever, and /smart-compact, budget reminders, and host auto-compaction all fail in that session (4 sessions hit on this machine). `node scripts/patch-token-meter.mjs` fixes it idempotently (automatic backup + syntax validation; zero impact on healthy streams); **rerun it after every dsh upgrade**. The pre-patch failure path also degrades gracefully: the command receipt names the underlying error instead of throwing a bare gateway toast.
+`functioning` records `evaluations`, `lastMeasure` (provider / model / totalTokens / contextWindow / completionReserve / usableWindow / thresholdTokens), `lastSkipReason`, `foreignCompactions`, and — since 0.6.2 — a per-session ledger for the last 8 sessions. Together with `effectiveThresholds`, "is it evaluating, who won the race, why did it not switch" never needs a probe build.
 
-## Uninstall
+### Compatibility
+
+- **Single slot**: the `compaction` service is a single slot; this plugin takes it by default and must be listed before other compaction engines in the profile bundles. Yielding engines skip mounting through their own courtesy check; the `engineMounted` probe says who holds the slot.
+- **Requires dsh >= 0.1.5-rc**: session logs are read through `Session.snapshotEvents()` (upstream removed `Session.events` before 0.1.5). When the host does not provide it the plugin fails loudly instead of silently forgetting.
+- **Isolated from third-party toolResultPruner**: the engine runs on `ctx.isolate('toolResultPruner')` and never consults it (a stale copy aborts every rollover inside basic compaction).
+- **Requests are never silently swallowed**: `new_context` is consumed only when a rollover actually commits; refusals and errors keep the request pending, retried each step, with the reason in `lastRolloverRefusedAt` / `lastRolloverRefusedReason` (same reason merged within 30s).
+- **Rebuild after a dsh upgrade**: the plugin's bundled `node_modules` is the real resolution target at runtime — rerun `npm install` and rebuild `lib/` after upgrading dsh.
+- **Host token-meter patch**: `node scripts/patch-token-meter.mjs` idempotently repairs the meter replay crash (backup + syntax check); rerun it after every dsh upgrade.
+
+### Uninstall
 
 ```sh
 dsh plugin --profile web remove dsh-smart-compact
 ```
 
-Uninstall removes every tool, listener, and engine with the plugin fiber; notes files are kept under `notesDir` (delete that directory manually if unwanted). Compaction behavior reverts to the DSH default.
+Uninstalling removes every tool, listener, and engine with the plugin fiber; notes files are kept under `notesDir` (delete that directory manually if unwanted).
+
+## How it works
+
+When the context fills up the engine does not write an LLM summary. It archives the old window intact (the session's existing durable event stream — no new storage), grants an 8192-token grace band for the model to write handoff notes, then opens a clean new window containing only a fixed template ("the previous window is archived in full; current state is in ctx_notes; use ctx_history for detail"). Zero summarization calls; nothing is lost and everything can be read back exactly.
+
+The anchor follows the notes: if the session wrote `ctx_notes`, it points at the notes; if it never did, it says so outright and points at `ctx_history` (and project memory) instead of an empty channel. It also carries two mechanically derived lines (zero model calls, fixed-length truncation): `Task:` from the latest session title and `Last action:` from the newest content event, plus a statement that the latest message stays in the new window.
+
+Window numbering: the handoff header's `Context window #N` matches the session-window index (the first window is #1), and `ctx_history list` additionally prints `live window: #N`.
 
 ## Reliability & verification
 
-- 123 Vitest unit tests (client regressions: the button click flow's three-stage call sequence "write command → submit → draft restore" + render structure and inert behavior without a session + semantic availability: `isInert` fail-open / post-rollover greying / slot-held greying + state tooltip copy; host-side: `windowAvailability` in seven shapes of the engine-aligned inequality + `framedCheckpointTokenEstimate` pricing + the receipt's "too little content" translation): budget reads, notes read/write & atomicity, history recall & truncation, the three rollover states, new_context consumption (including the anti-swallow fallback), lifecycle idempotence, three-tier reminders, plus host Session API adaptation (including the named error when `snapshotEvents()` is missing), window-numbering parity, `DSH_HOME` isolation (`vitest.config.ts` gives the whole test run a temporary home — running tests used to overwrite the real `engine-state.json` with synthetic data, reproduced and fixed), pruner-isolation wiring & self-check, non-Error throws / abort signals / budget accounting, manual-path probe accounting and receipt copy, and other regressions.
-- **Dual-form staging install proof**: in a clean staging home, both install forms assemble independently — `dsh plugin add dsh-smart-compact` (npm prebuilt) and `dsh plugin add github:hoyyang/dsh-smart-compact` (source); `--dump-config` shows a single entry with no duplicates, and all six boot-check [A]-[F] cold-start static checks are green.
-- **Gate-11 release sanitize all green**: sanitize-check scans the working tree + full git history (43+ commit author identities rewritten to public handles) + a binary inventory — zero unhandled hits before push.
-- **Client assembly proof (v0.4.3)**: lib/client.js built via tsdown (30.95 kB, inline gold vortex texture included) and registered in the host client-modules table (client check: lib/client.js); boot-check.sh cold-start three-fault static detection all green + the --dump-config combined re-check passed; injector self-test 8/8 PASS; perfect-circle numeric proof under adversarial overrides: 26.00×26.00 / radius 999px / clip-path circle(50%).
-- **End-to-end proof (staging isolation, real model glm-5.3-flash)**: the model called `get_context_remaining` → `ctx_notes` (writing handoff notes) → `new_context` → `ctx_history` in sequence, full chain success; `new_context` triggered a real rollover (`rolloverCount: 1`), and `ctx_history` read back the archived window (window #1, ~5965 tokens archived).
-- The isolated staging environment must pass the `dsh --dump-config` combined pre-check plus a real boot before promotion; the running mode is queryable via the `engine-state.json` probe.
-- **Real-machine rollover proof (a real session on this machine)**: `new_context` → rollover committed (`rolloverCount: 1`, `lastRolloverTrigger: new_context`, `lastRolloverRefusedReason: null`) → window #1 fully archived (393 events / ~307k tokens) → the new window's handoff header read `Context window #2 opened` → cross-window `ctx_history search` hit 23 entries; the main home's `boot-check.sh` cold-start three-fault static detection all green.
-- **State-route live proof (v0.4.3)**: `GET /dsh-smart-compact/state` returns `{ok:true, engineMounted:true, windowNo:2, archivable:true}` for the active session (window #2 with new conversation after rollover → clickable) and `{windowNo:1, archivable:false}` for a new session (nothing to archive → button inert); page fetch interception confirmed the client polls every 4s with the session's real id; missing sessionId → 400, non-GET → 405, cold session → `no-live-agent` (the client fail-opens and stays clickable). Note: the host submit plane refuses submissions while an agent run is in progress (locked/busy refuse), so clicking the button mid-run is a silent no-op — established host semantics.
-- 0.3.0's adaptation basis: host 0.1.5-rc.1's `Session` removed `events`, so the plugin reads via `snapshotEvents()` instead; the bundled 0.1.5-rc.2's runtime `lib/` is byte-identical to host rc.1's, verified with `diff -rq`.
+- **184 unit tests green (v0.6.3)**: budget reading with header-first routing, notes read/write and atomicity, history read-back and truncation, the three bands, new_context consumption and anti-swallow, degenerate-turn switch, anti-churn cap, lifecycle idempotency, reminder tiers, DSH_HOME isolation, pruner isolation self-check, client button click flow and semantic availability.
+- **Built-artifact probe (imports `lib/`, not source)**: the azure shape reports `window 272000 / reserve 128000 / usable 144000 / threshold 135808`; the deepseek shape reports `607808`.
+- **Isolation verified**: in a clean staging home both `dsh plugin add` (npm prebuilt) and `dsh plugin add github:hoyyang/dsh-smart-compact` (source) mount, `--dump-config` shows a single entry, and boot-check's six cold-start classes [A]–[F] are all green.
+- **Gate 11 sanitization**: sanitize-check scans the working tree, the full git history, and binaries; zero unhandled hits before push (run for 0.5.3 and again for 0.6.3).
+- **Real rollover evidence**: `new_context` → committed switch (`rolloverCount: 1`, `lastRolloverTrigger: new_context`) → window #1 archived in full (393 events / ~307k tokens) → new handoff header `Context window #2 opened` → 23 cross-window `ctx_history search` hits.
+- **Real automatic rollover (v0.6.1)**: 2026-10-26 10:32:23, a `compaction/summary` with no `sourceCommandId` (not command-driven) at measured 628,078 ≥ threshold 607,808; the same turn then continued for 64 steps with 0 new turns and 0 real user inputs; `INVALID_REQUEST` count after restart: 0.
+- **Degenerate-turn evidence (v0.6.2)**: the 2026-11-03 android-pane session switched to azure, grew 136k → 313k with no automatic switch, and three consecutive turns ended `max-tokens` with `outputTokens: 16` and no visible text — since 0.6.2 "a degenerate turn always switches first" handles that shape.
+- **State route verified live**: `GET /dsh-smart-compact/state` returns `{ok:true, engineMounted:true, windowNo:2, archivable:true}` for an active session and `{windowNo:1, archivable:false}` for a fresh one; missing sessionId → 400, non-GET → 405.
+- **Troubleshooting order**: `engine-state.json`'s `lastMeasure` first (are provider/model/usableWindow right?), then `lastRolloverRefusedReason` and the command receipt's ❌ text, then `budgetDegraded` for unmeasurable budgets, then `reminderObserved.passFailures` for reminder delivery.
+- **Known limits**: the manual `/smart-compact` path does no pre-pruning; the host's submit plane refuses submissions while an agent is running, so a click during a run is a no-op (established host semantics); on the very first step (before a request header exists) the window falls back to the adapter default and corrects on the next step.
+- **Security boundary**: no credentials read, no retrieval/scoring infrastructure touched, all mounting changes go through staging first, and only peer-dependency ranges are declared.
+
+## FAQ
+
+**Does it roll over automatically when the context fills up?**
+Yes. Auto is on by default: past the trigger line + 8192 tokens it performs the mechanical switch with zero model calls. Set `auto: false` to keep only the manual command.
+
+**How is this different from context compaction?**
+Compaction hands the old conversation to a model to write a summary (one summarization call, irreversible). This plugin archives the whole window and hands off through pointers — nothing is lost and the rollover costs zero tokens.
+
+**Is the context lost after a rollover?**
+No. The old window enters the local durable stream in full: `ctx_history list` shows ranges, `ctx_history read` returns events by seq, `ctx_history search` scans the archive.
+
+**Do I need to configure anything after installing?**
+No. Every key is optional and defaults to the shipping behavior; the only follow-up is `npm install` plus a `lib/` rebuild after upgrading dsh.
+
+**Does it conflict with the official compaction?**
+No, but they race. Both hang off pre-step and this plugin's 0.75 sits below the official 0.8; `scripts/write-preset-overrides.mjs --apply` disables the official auto in the user layer (untouched by upgrades), and the yielding engine skips mounting through its courtesy check.
+
+**Why is the trigger not simply 85%?**
+Because the provider budget is an equation: input + requested max_tokens ≤ window. A large max_tokens puts the usable input ceiling far below a percentage line, so a pure ratio waits past the wall — since v0.6.1 it is min(ratio×window, usable wall − buffer).
+
+**Does it still work after switching models mid-session (e.g. to azure)?**
+Yes, since v0.6.3. The window follows the provider/model of the latest real request, so the next step re-derives the threshold.
+
+## Local build
+
+```sh
+npm install
+npm run build          # host (lib/)
+npm run build:client   # UI (tsdown)
+npm run typecheck
+npx vitest run
+```
 
 ## License
 

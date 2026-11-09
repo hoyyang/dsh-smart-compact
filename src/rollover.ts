@@ -23,15 +23,32 @@ type CompactionResult = NonNullable<Awaited<ReturnType<BasicCompactionEngine['co
 
 export interface RolloverEngineConfig {
   thresholdRatio: number
+  /** Per-provider threshold resolver; absent = thresholdRatio for every provider. */
+  thresholdFor?: (provider: string) => number
   fallbackBufferTokens: number
+  /**
+   * Anti-churn floor in tokens: an automatic switch is refused until at least
+   * this many tokens were added since the previous switch. Absent/0 = no guard.
+   */
+  minAddedTokens?: number
   auto: boolean
   logger: { info(msg: string): void; warn(msg: string): void; debug(msg: string): void }
   /** Called after each successful rollover (ops observability). */
   onRollover?: (info: { generation: number; trigger: string }) => void
   /** Called when a forced rollover cannot run (ops observability for the "never silently swallowed" contract). */
-  onRolloverRefused?: (info: { reason: string }) => void
+  onRolloverRefused?: (info: { reason: string; sessionId: string }) => void
   /** Called when budget measurement fails repeatedly (degraded visibility). */
   onBudgetDegraded?: (consecutiveFailures: number) => void
+  /** Observability: every automatic-band threshold evaluation, with the measured numbers. */
+  onEvaluate?: (info: { trigger: string; sessionId: string; provider: string; model?: string; totalTokens: number; contextWindow: number; thresholdTokens: number; completionReserve: number; usableWindow: number }) => void
+  /** Observability: the automatic band declined to switch, with the reason. */
+  onSkip?: (info: { trigger: string; sessionId: string; provider: string; model?: string; reason: string; totalTokens: number; contextWindow: number; thresholdTokens: number; completionReserve: number; usableWindow: number }) => void
+  /**
+   * Observability: a compaction this engine did not author was committed in the
+   * session (the official summary engine won the race). Never silent — that is
+   * exactly the "is it even working?" blind spot this hook exists to close.
+   */
+  onForeignCompaction?: (info: { count: number; at: number | null; snippet: string }) => void
   /**
    * Notes-presence probe for the handoff anchor (advisory honesty): when it
    * definitively returns false, summarize() stops claiming the notes channel
@@ -69,6 +86,13 @@ function openedWindowNumber(generation: number): number {
 }
 
 const ROLLOVER_TEMPLATE_MARKER = '[smart-compact rollover]'
+
+/** First text block of a compaction/summary event, or '' when the shape is unknown. */
+function summaryTextOf(event: SessionEventLike): string {
+  const data = event.data as { summary?: readonly { type?: string; text?: string }[] } | undefined
+  const first = data?.summary?.[0]
+  return typeof first?.text === 'string' ? first.text : ''
+}
 
 /** Hard char cap for each derived orientation line (the probe prices this worst case). */
 export const HANDOFF_LINE_MAX = 80
@@ -307,8 +331,16 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
   private readonly rolloverCfg: RolloverEngineConfig
   private readonly ownCtx: CtxLike
   private remindedGeneration = new WeakMap<object, number>()
+  /** Last generation whose anti-churn skip was logged (a skip is otherwise silent). */
+  private debouncedGeneration = new WeakMap<object, number>()
   private warnedGenerationUnavailable = false
   private budgetFailures = new WeakMap<object, number>()
+  /** Measured surface size right after the last switch (anti-churn baseline). */
+  private postRolloverTotals = new WeakMap<object, number>()
+  /** Compactions not authored by this engine already reported (dedup). */
+  private foreignSeen = new WeakMap<object, number>()
+  /** Sessions whose pre-existing history was adopted as the foreign baseline. */
+  private foreignBaseline = new WeakSet<object>()
 
   constructor(ctx: CtxLike, config: BasicEngineConfigInput, rolloverCfg: RolloverEngineConfig, pending: PendingRollover) {
     super(ctx as never, config)
@@ -355,9 +387,9 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     }
   }
 
-  private noticeRefusal(reason: string): void {
+  private noticeRefusal(reason: string, sessionId: string): void {
     try {
-      this.rolloverCfg.onRolloverRefused?.({ reason })
+      this.rolloverCfg.onRolloverRefused?.({ reason, sessionId })
     } catch { /* observability must never break the loop */ }
   }
 
@@ -365,6 +397,57 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
     try {
       this.rolloverCfg.onRollover?.({ generation: this.generationOf(agent), trigger })
     } catch { /* observability must never break the compaction path */ }
+  }
+
+  /** Record the post-switch surface size so the next automatic switch must add real content. */
+  private rememberPostRollover(agent: { session: object }, preTotalTokens: number, result: { shadowedTokenCount?: number } | null): void {
+    const shadowed = typeof result?.shadowedTokenCount === 'number' ? result.shadowedTokenCount : 0
+    this.postRolloverTotals.set(agent.session, Math.max(0, preTotalTokens - shadowed))
+  }
+
+  /**
+   * Report compactions this engine did not author. The official
+   * dsh-compaction-basic (or a host engine) can win a pre-step race; without
+   * this probe the loss is invisible and the plugin looks broken/harmless.
+   * The first call adopts the session's existing history as the baseline, so a
+   * resumed session never reports older windows as foreign.
+   */
+  noticeForeignCompactions(agent: { session: SessionLogLike }): void {
+    let events: readonly SessionEventLike[]
+    try {
+      events = sessionEvents(agent.session)
+    } catch {
+      return
+    }
+    // Our own handoffs are self-identifying (the template marker), so a summary
+    // without it is, by construction, authored by another engine.
+    let foreign = 0
+    for (const event of events) {
+      if (event.type !== 'compaction/summary') continue
+      if (!summaryTextOf(event).startsWith(ROLLOVER_TEMPLATE_MARKER)) foreign += 1
+    }
+    if (!this.foreignBaseline.has(agent.session)) {
+      this.foreignBaseline.add(agent.session)
+      this.foreignSeen.set(agent.session, foreign)
+      return
+    }
+    const seen = this.foreignSeen.get(agent.session) ?? 0
+    if (foreign <= seen) return
+    this.foreignSeen.set(agent.session, foreign)
+    let snippet = ''
+    let at: number | null = null
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i]
+      if (event.type !== 'compaction/summary') continue
+      const text = summaryTextOf(event)
+      if (text.startsWith(ROLLOVER_TEMPLATE_MARKER)) continue
+      snippet = text.slice(0, 160)
+      at = typeof event.time === 'number' ? event.time : null
+      break
+    }
+    try {
+      this.rolloverCfg.onForeignCompaction?.({ count: foreign, at, snippet })
+    } catch { /* observability must never break the step loop */ }
   }
 
   /**
@@ -475,16 +558,20 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
         }
         const reason = describeError(error)
         this.rolloverCfg.logger.warn(`dsh-smart-compact: forced rollover failed — ${reason}`)
-        this.noticeRefusal(reason)
+        this.noticeRefusal(reason, agent.session.id)
         return null
       }
       if (result === null) {
         const reason = 'engine found nothing compactable (selectCompactableRange returned null on both pressure and overflow)'
         this.rolloverCfg.logger.warn(`dsh-smart-compact: forced rollover refused — ${reason}; the new_context request stays pending`)
-        this.noticeRefusal(reason)
+        this.noticeRefusal(reason, agent.session.id)
         return null
       }
       consumeRollover(this.pending, agent.session)
+      try {
+        const budget = await measureBudget(this.ownCtx, agent, signal)
+        this.postRolloverTotals.set(agent.session, budget.totalTokens)
+      } catch { /* best effort: the guard degrades to 0 baseline */ }
       this.noteRollover(agent, 'new_context')
       return result
     }
@@ -497,12 +584,78 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
         this.noteBudgetFailure(agent, error)
         return null
       }
-      const thresholdTokens = budget.contextWindow * this.rolloverCfg.thresholdRatio
-      if (budget.totalTokens < thresholdTokens) return null
+      const ratio = this.rolloverCfg.thresholdFor?.(budget.provider) ?? this.rolloverCfg.thresholdRatio
+      // The provider budget is an EQUATION: input + requested completion must fit
+      // the window (dsh handbook: 664,728 messages + 384,000 completion = 1,048,728
+      // > 1,048,576 -> 400). With a large max_tokens the usable input ceiling sits
+      // far below ratio*window, so a pure percentage threshold can wait past the
+      // wall: observed 2026-10-26, a 1M-window session was rejected at ~665k while
+      // 0.75 waited for 750k — the automatic switch could never fire and every
+      // retry failed with 400 INVALID_REQUEST until a manual rollover.
+      const completionReserve = budget.completionReserve ?? 0
+      const usableWall = Math.max(1, budget.contextWindow - completionReserve)
+      const thresholdTokens = Math.min(
+        budget.contextWindow * ratio,
+        Math.max(1, usableWall - this.rolloverCfg.fallbackBufferTokens),
+      )
+      // Every evaluation is observable: "is the auto band even looking?" must be
+      // answerable from engine-state alone (the 2026-10 invisible-loss incident).
+      const measured = { trigger, sessionId: agent.session.id, provider: budget.provider, ...(budget.model === undefined ? {} : { model: budget.model }), totalTokens: budget.totalTokens, contextWindow: budget.contextWindow, thresholdTokens, completionReserve, usableWindow: usableWall }
+      if (budget.totalTokens < thresholdTokens) {
+        this.rolloverCfg.onSkip?.({ ...measured, reason: 'below threshold' })
+        return null
+      }
+      // Anti-churn: refusing a switch that would land where the previous one did
+      // (small windows carry a fixed base near the threshold) — and after a
+      // manual switch the baseline is refreshed so auto never immediately re-fires.
+      const baseline = this.postRolloverTotals.get(agent.session) ?? 0
+      const addedTokens = budget.totalTokens - baseline
+      const configuredMinAdded = this.rolloverCfg.minAddedTokens ?? 0
+      // Cap the anti-churn floor to the band that actually remains below the
+      // wall. After a switch the baseline is the retained tail (tens of k on a
+      // PTC session), and an absolute 100k floor then demands more input than
+      // the provider accepts: 272k window - 128k completion = 144k usable,
+      // baseline ~50k + 100k = 150k > 144k, so the guard could never unlock and
+      // the turn died at the wall instead of switching before it. Only applies
+      // once a real post-switch baseline exists (first evaluation: unchanged).
+      const minAdded = configuredMinAdded > 0 && baseline > 0
+        ? Math.min(configuredMinAdded, Math.max(0, usableWall - baseline - this.rolloverCfg.fallbackBufferTokens))
+        : configuredMinAdded
+      try { this.rolloverCfg.onEvaluate?.(measured) } catch { /* observability must never break the loop */ }
+      if (minAdded > 0 && addedTokens < minAdded) {
+        // Silence here cost a whole diagnosis session (2026-11-03): the session
+        // sat above the threshold for 40 steps and the only trace was a state
+        // slot another session overwrote. Log it once per window generation.
+        const generation = this.generationOf(agent)
+        if (this.debouncedGeneration.get(agent.session) !== generation) {
+          this.debouncedGeneration.set(agent.session, generation)
+          this.rolloverCfg.logger.info(`dsh-smart-compact: automatic switch held back — only ${Math.round(addedTokens)} tokens added since the last switch (< ${minAdded} anti-churn floor); measured ${budget.totalTokens} ≥ threshold ${Math.round(thresholdTokens)} of window ${budget.contextWindow}`)
+        }
+        this.rolloverCfg.onSkip?.({ ...measured, reason: `only ${Math.round(addedTokens)} tokens added since the last switch (< ${minAdded})` })
+        return null
+      }
       const forceAt = thresholdTokens + this.rolloverCfg.fallbackBufferTokens
       if (budget.totalTokens >= forceAt) {
-        const result = await super.compactIfNeeded(agent as never, trigger as never, signal as never)
-        if (result !== null) this.noteRollover(agent, 'pressure')
+        // v0.5.7: the forced band is a window switch, so it uses the same
+        // zero-retention selection as the manual /smart-compact (compactNow
+        // passes retainTokens = 0). Basic's pressure path kept a priced tail of
+        // retainRatio (0.16-0.22 of the window, i.e. tens of k tokens with
+        // every image and tool result in it) visible in the "new" window, so
+        // auto and manual switches produced different windows. The overflow
+        // path of basic is exactly selectCompactableRange(..., 0) on the
+        // current surface; threshold already proven above.
+        const result = await super.compactIfNeeded(agent as never, 'context-overflow' as never, signal as never)
+        if (result === null) {
+          // Same silence trap one band lower: the forced band used to return
+          // null with no log and no refusal record, so "above the wall and
+          // still not switching" looked exactly like "below threshold".
+          const reason = `forced band: nothing compactable at ${budget.totalTokens} tokens (window ${budget.contextWindow}, usable ${usableWall})`
+          this.rolloverCfg.logger.warn(`dsh-smart-compact: automatic switch refused — ${reason}`)
+          this.noticeRefusal(reason, agent.session.id)
+          return null
+        }
+        this.rememberPostRollover(agent, budget.totalTokens, result)
+        this.noteRollover(agent, 'pressure')
         return result
       }
       // Grace band: remind once per window generation, keep working.
@@ -510,7 +663,7 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
       if (this.remindedGeneration.get(agent.session) !== generation) {
         this.remindedGeneration.set(agent.session, generation)
         this.rolloverCfg.logger.info(
-          `dsh-smart-compact: grace band entered (${budget.totalTokens}/${budget.contextWindow} tokens, forced rollover at ${Math.round(forceAt)}) — the model should write ctx_notes now`,
+          `dsh-smart-compact: grace band entered for ${agent.session.id} (${budget.totalTokens}/${budget.contextWindow} tokens on ${budget.provider}${budget.model === undefined ? '' : '/' + budget.model}, forced rollover at ${Math.round(forceAt)}) — the model should write ctx_notes now`,
         )
       }
       return null
@@ -530,9 +683,34 @@ export class RolloverCompactionEngine extends BasicCompactionEngine {
    * fail-loud through the command's receipt instead — it is not a rollover
    * and must not inflate rolloverCount.
    */
+  /**
+   * Window switch requested by the continuation watcher after a degenerate
+   * (zero-output) turn. Identical lossless path to the manual command, but
+   * booked under its own trigger so the ops probe never claims a human asked.
+   */
+  async rolloverForContinuation(agent: AgentLike) {
+    const result = await super.compactNow(agent as never, undefined as never, undefined as never)
+    if (result !== null) {
+      this.noteRollover(agent, 'continuation')
+      try {
+        const budget = await measureBudget(this.ownCtx, agent)
+        this.postRolloverTotals.set(agent.session, budget.totalTokens)
+      } catch { /* best effort: the guard degrades to 0 baseline */ }
+    }
+    return result
+  }
+
   override async compactNow(agent: AgentLike, signal?: AbortSignal, sourceCommandId?: string) {
     const result = await super.compactNow(agent as never, signal as never, sourceCommandId as never)
-    if (result !== null) this.noteRollover(agent, 'manual')
+    if (result !== null) {
+      this.noteRollover(agent, 'manual')
+      // A manual switch resets the anti-churn baseline: the user just asked for a
+      // fresh window, so the next automatic switch must earn its own added volume.
+      try {
+        const budget = await measureBudget(this.ownCtx, agent, signal)
+        this.postRolloverTotals.set(agent.session, budget.totalTokens)
+      } catch { /* best effort */ }
+    }
     return result
   }
 }
